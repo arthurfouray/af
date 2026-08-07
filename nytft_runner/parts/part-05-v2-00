@@ -1,0 +1,99 @@
+# --- V2 audit overrides: stricter address syntax, article-level name association,
+# improved Google Maps parsing, and historical-address geocoding fallback. ---
+
+_CARDINAL_UNITS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19,
+}
+_CARDINAL_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_ORDINAL_BASE = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14,
+    "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+    "nineteenth": 19, "twentieth": 20, "thirtieth": 30, "fortieth": 40,
+    "fiftieth": 50, "sixtieth": 60, "seventieth": 70, "eightieth": 80,
+    "ninetieth": 90, "hundredth": 100,
+}
+_DIRECTION_CANON = {"north": "N", "south": "S", "east": "E", "west": "W", "n": "N", "s": "S", "e": "E", "w": "W"}
+_SUFFIX_CANON = {
+    "street": "St", "st": "St", "avenue": "Ave", "ave": "Ave",
+    "road": "Rd", "rd": "Rd", "boulevard": "Blvd", "blvd": "Blvd",
+    "lane": "Ln", "ln": "Ln", "drive": "Dr", "dr": "Dr",
+    "place": "Pl", "pl": "Pl", "court": "Ct", "ct": "Ct",
+    "highway": "Hwy", "hwy": "Hwy", "parkway": "Pkwy", "pkwy": "Pkwy",
+    "terrace": "Ter", "ter": "Ter", "broadway": "Broadway",
+    "bowery": "Bowery", "square": "Square", "plaza": "Plaza",
+    "mews": "Mews", "crescent": "Crescent", "circle": "Circle",
+    "row": "Row", "walk": "Walk", "way": "Way", "alley": "Alley",
+    "concourse": "Concourse", "turnpike": "Turnpike", "route": "Route",
+    "pier": "Pier", "market": "Market", "gardens": "Gardens",
+}
+
+_V2_FULL_SUFFIX = (
+    r"Street|Avenue|Road|Boulevard|Lane|Drive|Place|Court|Highway|Parkway|"
+    r"Terrace|Alley|Concourse|Turnpike|Route|Plaza|Square|Pier|Market|Mews|"
+    r"Crescent|Circle|Row|Walk|Broadway|Bowery|Gardens"
+)
+_V2_ABBR_SUFFIX = r"St|Ave|Rd|Blvd|Ln|Dr|Pl|Ct|Hwy|Pkwy|Ter"
+_V2_SUFFIX = rf"(?:{_V2_FULL_SUFFIX}|{_V2_ABBR_SUFFIX}\.?)"
+_V2_SUFFIX_END = rf"{_V2_SUFFIX}(?=[\s,;.)]|$)(?:\s+[A-Z])?"
+_V2_TOKEN = r"[A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9'’&.\-/]*"
+_V2_DIR = r"(?:(?:N|S|E|W)\.?\s+|(?:North|South|East|West)\s+)?"
+_V2_LOCALITY = (
+    r"(?:\s*,?\s*(?:Brooklyn|Queens|Bronx|Manhattan|Staten Island|New York City|"
+    r"New York|NYC|Jersey City|Hoboken|Long Island City|Flushing|Astoria|Harlem|"
+    r"Ridgewood|Williamsburg|Greenpoint|Bed[- ]Stuy|Crown Heights|SoHo|Tribeca))?"
+)
+_V2_STATE_ZIP = r"(?:\s*,?\s*(?:NY|New York|NJ|New Jersey)\s*\d{5}(?:-\d{4})?)?"
+_V2_INTERSECTION = (
+    rf"(?:\s*,?\s*(?:at|near|between|and|corner of|off)\s+{_V2_DIR}"
+    rf"(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END})?"
+)
+_V2_NUMERIC_RE = re.compile(
+    rf"(?<![\w/])(?:No\.?\s*)?\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+"
+    rf"{_V2_DIR}(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END}"
+    rf"{_V2_INTERSECTION}{_V2_LOCALITY}{_V2_STATE_ZIP}", re.I,
+)
+_V2_AVE_LETTER_RE = re.compile(
+    rf"(?<![\w/])\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+"
+    rf"(?:Avenue|Ave\.?)\s+[A-Z](?=[\s,;.)]|$){_V2_LOCALITY}{_V2_STATE_ZIP}", re.I,
+)
+_V2_SPELLED_RE = re.compile(
+    rf"(?<!\w)(?:{HOUSE_WORD})(?:[- ](?:{HOUSE_WORD})){{0,4}}\s+{_V2_DIR}"
+    rf"(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END}{_V2_INTERSECTION}{_V2_LOCALITY}{_V2_STATE_ZIP}", re.I,
+)
+_V2_PARTIAL_RE = re.compile(
+    rf"\b(?:at|on|near|opposite|across from|corner of|between|off)\s+(?:the\s+)?"
+    rf"{_V2_DIR}(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END}"
+    rf"(?:\s*,?\s*(?:and|at|near|between)\s+{_V2_DIR}(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END})?", re.I,
+)
+_V2_STRICT_NUMERIC_FULL = re.compile(
+    rf"^(?:No\.?\s*)?\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+{_V2_DIR}"
+    rf"(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END}{_V2_INTERSECTION}{_V2_LOCALITY}{_V2_STATE_ZIP}$", re.I,
+)
+_V2_STRICT_AVE_LETTER_FULL = re.compile(
+    rf"^\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+(?:Avenue|Ave\.?)\s+[A-Z]"
+    rf"{_V2_LOCALITY}{_V2_STATE_ZIP}$", re.I,
+)
+_V2_STRICT_SPELLED_FULL = re.compile(
+    rf"^(?:{HOUSE_WORD})(?:[- ](?:{HOUSE_WORD})){{0,4}}\s+{_V2_DIR}"
+    rf"(?:{_V2_TOKEN}\s+){{0,8}}{_V2_SUFFIX_END}{_V2_INTERSECTION}{_V2_LOCALITY}{_V2_STATE_ZIP}$", re.I,
+)
+_V2_OBVIOUS_PROSE = re.compile(
+    r"\b(?:ways|places|stands|stools|drinks|dripping|average|storefront|starters|started|"
+    r"stuffed|strong|stews|plating|plants|stating|woman|women|man|men|one it|two other|"
+    r"one of|two of|three of|four of|five of|the place|a place)\b", re.I,
+)
+_V2_WORLD_CITIES = re.compile(
+    r"\b(New York|Brooklyn|Queens|Bronx|Manhattan|Staten Island|London|Paris|Rome|Milan|"
+    r"Berlin|Vienna|Zurich|Geneva|Tokyo|Kyoto|Hong Kong|Shanghai|Beijing|Mexico City|"
+    r"Los Angeles|San Francisco|Chicago|Miami|Boston|Montreal|Toronto|Athens|Venice|"
+    r"Madrid|Barcelona|Lisbon|Brussels|Amsterdam|Copenhagen|Stockholm|Oslo|Sydney|Melbourne)\b", re.I,
+)
