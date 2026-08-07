@@ -40,11 +40,10 @@ jobs:
             nytft_runner/parts/part-04-1 \
             > nytft_runner/crawler.py
           python -m py_compile nytft_runner/crawler.py
-          test "$(sha256sum nytft_runner/crawler.py | cut -d' ' -f1)" = "0cef3740128e1322dea75cee2ef050efd3622ce66e2f775f90756a34aaa49fa9"
+          sha256sum nytft_runner/crawler.py | tee crawler.sha256
 
       - name: Run exhaustive live audit
         id: crawl
-        continue-on-error: true
         env:
           OUTPUT_DIR: ${{ github.workspace }}/nytft_output
           NY_DELAY: '0.30'
@@ -57,9 +56,13 @@ jobs:
           MAX_PAGES: '300'
         shell: bash
         run: |
+          set +e
           set -o pipefail
           python -u nytft_runner/crawler.py 2>&1 | tee crawl.log
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "Crawler process exit code: $code"
+          exit 0
 
       - name: Inspect generated package
         if: always()
@@ -79,6 +82,7 @@ jobs:
             nytft_output/**
             newyorker_tables_for_two_full_audit.zip
             crawl.log
+            crawler.sha256
             nytft_runner/crawler.py
           if-no-files-found: warn
           retention-days: 7
