@@ -1,0 +1,125 @@
+name: New Yorker Tables for Two final verification
+
+on:
+  push:
+    paths:
+      - payload/nytft_final_verify.py.gz.b64
+      - payload/repair_v6.py.gz.b64
+      - payload/prepare_final_candidates.py.gz.b64
+      - .github/workflows/nytft_final_verify.yml
+  pull_request:
+    paths:
+      - audit-triggers/nytft-final-verify-*.txt
+      - payload/nytft_final_verify.py.gz.b64
+      - payload/repair_v6.py.gz.b64
+      - payload/prepare_final_candidates.py.gz.b64
+      - .github/workflows/nytft_final_verify.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Check out verifier branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml urllib3
+
+      - name: Download exhaustive crawl artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p upstream_artifact
+          gh run download 31206158007 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name newyorker-tables-for-two-full-audit \
+            --dir upstream_artifact
+          find upstream_artifact -maxdepth 3 -type f -printf '%p %s bytes\n' | sort | head -80
+
+      - name: Decode and validate source-repair tools
+        run: |
+          mkdir -p work
+          base64 -d payload/repair_v6.py.gz.b64 | gzip -dc > work/repair_v6.py
+          base64 -d payload/prepare_final_candidates.py.gz.b64 | gzip -dc > work/prepare_final_candidates.py
+          base64 -d payload/nytft_final_verify.py.gz.b64 | gzip -dc > work/nytft_final_verify.py
+          # The first candidate-preparation payload used a local default. Make the
+          # decoded copy portable even when this workflow is rerun from an older ref.
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('work/prepare_final_candidates.py')
+          s=p.read_text()
+          if "import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json\n" in s:
+              s=s.replace("import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json\n", "import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json, os\n")
+          old="ROOT=Path('/mnt/data')\nLEDGER=ROOT/'nytft_exhaustive/nytft_output/https___www.newyorker.com_magazine_tables-for-two - source occurrence ledger.csv'\nAUX=ROOT/'nytft_exhaustive/nytft_output/https___www.newyorker.com_magazine_tables-for-two - auxiliary evidence.csv'\n"
+          new="ROOT=Path(os.environ.get('NYTFT_WORK_ROOT','/mnt/data')).resolve()\nEXHAUSTIVE_ROOT=Path(os.environ.get('NYTFT_EXHAUSTIVE_ROOT',str(ROOT/'nytft_exhaustive'))).resolve()\nLEDGER=EXHAUSTIVE_ROOT/'nytft_output/https___www.newyorker.com_magazine_tables-for-two - source occurrence ledger.csv'\nAUX=EXHAUSTIVE_ROOT/'nytft_output/https___www.newyorker.com_magazine_tables-for-two - auxiliary evidence.csv'\n"
+          if old in s:
+              s=s.replace(old,new)
+          p.write_text(s)
+          PY
+          python -m py_compile work/repair_v6.py work/prepare_final_candidates.py work/nytft_final_verify.py
+          sha256sum work/*.py
+
+      - name: Prepare source-corrected candidates
+        env:
+          NYTFT_WORK_ROOT: ${{ github.workspace }}/work
+          NYTFT_EXHAUSTIVE_ROOT: ${{ github.workspace }}/upstream_artifact
+        run: |
+          python work/prepare_final_candidates.py | tee work/prepare_candidates.log
+          gzip -9 -n -c work/final_candidates_input.csv | base64 -w0 > work/final_candidates_input.csv.gz.b64
+          python - <<'PY'
+          import csv
+          for path in ['work/final_candidates_input.csv','work/final_candidate_evidence.csv']:
+              with open(path,encoding='utf-8-sig',newline='') as f:
+                  print(path, sum(1 for _ in csv.DictReader(f)))
+          PY
+
+      - name: Run final constrained verification
+        id: verifier
+        continue-on-error: true
+        env:
+          UPSTREAM_ROOT: ${{ github.workspace }}/upstream_artifact
+          INPUT_B64: ${{ github.workspace }}/work/final_candidates_input.csv.gz.b64
+          OUTPUT_DIR: ${{ github.workspace }}/nytft_final_verification
+          MAX_GEOCODES: '0'
+        run: |
+          python work/nytft_final_verify.py | tee work/final_verification.log
+
+      - name: Inspect final verification output
+        if: always()
+        run: |
+          find nytft_final_verification work -maxdepth 2 -type f -printf '%p %s bytes\n' | sort
+          test -f nytft_final_verification/final_verification_summary.json && cat nytft_final_verification/final_verification_summary.json || true
+
+      - name: Upload final verification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newyorker-tables-for-two-final-verification
+          path: |
+            nytft_final_verification/**
+            work/final_candidates_input.csv
+            work/final_candidate_evidence.csv
+            work/prepare_candidates.log
+            work/final_verification.log
+            work/repair_v6.py
+            work/prepare_final_candidates.py
+            work/nytft_final_verify.py
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Propagate verifier failure after preserving evidence
+        if: steps.verifier.outcome == 'failure'
+        run: exit 1
