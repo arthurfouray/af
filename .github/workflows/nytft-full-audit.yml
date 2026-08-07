@@ -1,0 +1,89 @@
+name: New Yorker Tables for Two full audit
+
+on:
+  pull_request:
+    paths:
+      - 'nytft_runner/**'
+      - '.github/workflows/nytft-full-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Check out audit branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: nytft_runner/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r nytft_runner/requirements.txt
+
+      - name: Assemble and compile crawler
+        run: |
+          cat \
+            nytft_runner/parts/part-00 \
+            nytft_runner/parts/part-01 \
+            nytft_runner/parts/part-02 \
+            nytft_runner/parts/part-03-0 \
+            nytft_runner/parts/part-03-1 \
+            nytft_runner/parts/part-04-0 \
+            nytft_runner/parts/part-04-1 \
+            > nytft_runner/crawler.py
+          python -m py_compile nytft_runner/crawler.py
+          test "$(sha256sum nytft_runner/crawler.py | cut -d' ' -f1)" = "0cef3740128e1322dea75cee2ef050efd3622ce66e2f775f90756a34aaa49fa9"
+
+      - name: Run exhaustive live audit
+        id: crawl
+        continue-on-error: true
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}/nytft_output
+          NY_DELAY: '0.30'
+          MAP_DELAY: '0.45'
+          OFFICIAL_DELAY: '0.20'
+          ARTICLE_WORKERS: '4'
+          OFFICIAL_WORKERS: '8'
+          REQUEST_TIMEOUT: '30'
+          MAX_RETRIES: '4'
+          MAX_PAGES: '300'
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u nytft_runner/crawler.py 2>&1 | tee crawl.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect generated package
+        if: always()
+        run: |
+          echo "Crawler exit code: ${{ steps.crawl.outputs.exit_code }}"
+          find nytft_output -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort || true
+          test -f nytft_output/run_summary.json || true
+          cat nytft_output/run_summary.json || true
+          ls -lh newyorker_tables_for_two_full_audit.zip || true
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newyorker-tables-for-two-full-audit
+          path: |
+            nytft_output/**
+            newyorker_tables_for_two_full_audit.zip
+            crawl.log
+            nytft_runner/crawler.py
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+
+      - name: Propagate crawler failure after preserving evidence
+        if: always()
+        run: test "${{ steps.crawl.outputs.exit_code }}" = "0"
