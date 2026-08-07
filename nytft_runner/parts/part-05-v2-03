@@ -1,0 +1,100 @@
+                "pattern_type": pattern_type,
+                "address_completeness": completeness,
+                "raw_address": raw,
+                "start": span[0], "end": span[1],
+                "syntax_reason": "",
+            })
+    return sorted(out, key=lambda x: (x["start"], -(x["end"] - x["start"])))
+
+
+def number_and_street(value: str) -> tuple[str, set[str]]:
+    normalized = norm_address(value)
+    m = re.search(r"\b\d{1,5}(?:-\d{1,5})?\b", normalized)
+    number = m.group(0) if m else ""
+    ignored = {
+        "new", "york", "ny", "united", "states", "usa", "brooklyn", "bronx", "queens",
+        "manhattan", "staten", "island", "at", "near", "between", "and", "corner", "of",
+        "jersey", "city", "hoboken", "london", "uk", "england", "ridgewood",
+    }
+    tokens = {t for t in normalized.split() if t not in ignored and not t.isdigit() and len(t) > 1}
+    return number, tokens
+
+
+def address_similarity(source: str, mapped: str) -> tuple[bool, float, str]:
+    sn, st = number_and_street(source)
+    mn, mt = number_and_street(mapped)
+    if sn and mn and sn != mn:
+        return False, 0.0, f"building number differs ({sn} vs {mn})"
+    suffixes = {"st", "ave", "rd", "blvd", "dr", "ln", "pl", "ct", "ter", "pkwy", "hwy"}
+    st_core, mt_core = st - suffixes, mt - suffixes
+    overlap = st_core & mt_core
+    union = st_core | mt_core
+    score = len(overlap) / max(1, len(union))
+    if sn and mn and sn == mn and overlap:
+        return True, max(0.90, score), "same normalized building number and street token"
+    if sn and mn and sn == mn and not st_core and not mt_core:
+        return True, 0.80, "same building number on suffix-only address"
+    if not sn and not mn and len(overlap) >= 2:
+        return True, max(0.75, score), "normalized street tokens agree"
+    if sn and not mn and len(overlap) >= 2:
+        return True, max(0.72, score), "mapped address omits building number but street tokens agree"
+    return False, score, "insufficient normalized street-address agreement"
+
+
+def _titlecase_name_candidates(prefix: str) -> list[str]:
+    # Extract proper-noun sequences while permitting common connectors inside a venue name.
+    pattern = re.compile(
+        r"(?:[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\-]*|[A-Z]{2,}|"
+        r"(?:de|del|della|du|des|di|da|la|le|el|al|an|and|&|on|of|the))"
+        r"(?:\s+(?:[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\-]*|[A-Z]{2,}|"
+        r"(?:de|del|della|du|des|di|da|la|le|el|al|an|and|&|on|of|the))){0,8}"
+    )
+    return [cleanup_name(m.group(0)) for m in pattern.finditer(prefix) if cleanup_name(m.group(0))]
+
+
+def extract_name_from_context(
+    text: str,
+    match: dict[str, Any],
+    title: str,
+    source_url: str,
+    aux_rows: list[dict[str, Any]],
+    article_corpus: str = "",
+    previous_block: str = "",
+    next_block: str = "",
+) -> tuple[str, str, float]:
+    address = match["raw_address"]
+    start, end = match["start"], match["end"]
+    prefix = text[max(0, start - 320):start]
+    local = text[max(0, start - 320):min(len(text), end + 220)]
+    corpus = " ".join([article_corpus, previous_block, text, next_block, title])
+    escaped = re.escape(address)
+
+    # Exact source-URL auxiliary evidence is acceptable only when the venue name appears
+    # in the direct New Yorker page corpus.
+    for aux in aux_rows:
+        aux_name = normalize_space(aux.get("name", ""))
+        aux_address = normalize_space(aux.get("address", ""))
+        if not aux_name:
+            continue
+        addr_ok = False
+        if aux_address:
+            addr_ok, _, _ = address_similarity(address, aux_address)
+        if (addr_ok or not aux_address) and norm_identity(aux_name) in norm_identity(corpus):
+            return aux_name, f"{aux.get('provider')} exact source-URL record, direct-source corroborated", 0.99
+
+    name_atom = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\-]*(?:\s+(?:[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\-]*|de|del|della|du|des|di|da|la|le|el|al|an|and|&|on|of|the)){0,8}"
+    patterns = [
+        (rf"(?:called|named|known as)\s+(?:the\s+)?(?P<name>{name_atom}).{{0,100}}?{escaped}", "called/named in same source block", 0.99),
+        (rf"(?P<name>{name_atom})\s*\(\s*{escaped}", "parenthetical address immediately after venue name", 0.99),
+        (rf"(?P<name>{name_atom}),?\s+(?:has moved|moved|has opened|opened|has reopened|reopened|is located|was located)\s+(?:at|to|on)\s+{escaped}", "same-block opening/location statement", 0.98),
+        (rf"(?:One is|one is|The new|the new|A new|a new|The|the|our favorite lunch counter,? the)\s+(?P<name>{name_atom}).{{0,140}}?(?:at|over at|located at|lurking quaintly at)\s+{escaped}", "same-block descriptive lead", 0.97),
+        (rf"(?P<name>{name_atom}),?\s+(?:over\s+)?at\s+{escaped}", "same-block name before address", 0.97),
+        (rf"(?P<name>{name_atom}),\s*{escaped}", "comma-delimited same-block name", 0.96),
+        (rf"(?P<name>[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9&'’./+\- ]{{2,80}})\s+{escaped}", "uppercase same-block lead", 0.96),
+    ]
+    for pattern, basis, confidence in patterns:
+        matches = list(re.finditer(pattern, local))
+        if not matches:
+            continue
+        name = cleanup_name(matches[-1].group("name"))
+        name = re.sub(r"^(?:One is|The new|A new|The|Our favorite lunch counter,? the)\s+", "", name, flags=re.I)
