@@ -38,6 +38,17 @@ jobs:
             nytft_runner/parts/part-03-1 \
             nytft_runner/parts/part-04-0 \
             nytft_runner/parts/part-04-1 \
+            nytft_runner/parts/part-05-v2-00 \
+            nytft_runner/parts/part-05-v2-01 \
+            nytft_runner/parts/part-05-v2-02 \
+            nytft_runner/parts/part-05-v2-03 \
+            nytft_runner/parts/part-05-v2-04 \
+            nytft_runner/parts/part-05-v2-05 \
+            nytft_runner/parts/part-05-v2-06 \
+            nytft_runner/parts/part-05-v2-07 \
+            nytft_runner/parts/part-05-v2-08 \
+            nytft_runner/parts/part-05-v2-09 \
+            nytft_runner/parts/part-06-entrypoint \
             > nytft_runner/crawler.py
           python -m py_compile nytft_runner/crawler.py
           sha256sum nytft_runner/crawler.py | tee crawler.sha256
@@ -47,7 +58,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ github.workspace }}/nytft_output
           NY_DELAY: '0.30'
-          MAP_DELAY: '0.45'
+          MAP_DELAY: '0.30'
           OFFICIAL_DELAY: '0.20'
           ARTICLE_WORKERS: '4'
           OFFICIAL_WORKERS: '8'
