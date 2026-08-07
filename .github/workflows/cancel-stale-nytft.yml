@@ -23,23 +23,21 @@ jobs:
           script: |
             const preferredRun = 31206158007;
             const runs = await github.paginate(
-              github.rest.actions.listWorkflowRuns,
+              github.rest.actions.listWorkflowRunsForRepo,
               {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'nytft-full-audit.yml',
-                branch: 'nytft-full-audit-20260807',
-                event: 'pull_request',
                 per_page: 100,
               }
             );
             const stale = runs.filter(run =>
               run.id !== preferredRun &&
+              run.name.includes('New Yorker Tables for Two') &&
               (run.status === 'queued' || run.status === 'in_progress')
             );
-            core.info(`Cancelling ${stale.length} superseded audit runs; preserving ${preferredRun}.`);
+            core.info(`Cancelling ${stale.length} superseded Tables for Two runs; preserving ${preferredRun}.`);
             for (const run of stale) {
-              core.info(`Cancelling run ${run.id} (#${run.run_number}, ${run.status}).`);
+              core.info(`Cancelling ${run.name} run ${run.id} (#${run.run_number}, ${run.status}).`);
               await github.rest.actions.cancelWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
