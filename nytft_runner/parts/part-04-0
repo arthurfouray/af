@@ -169,16 +169,21 @@ def main() -> int:
     occurrence_fields = [
         "occurrence_id", "inventory_order", "source_url", "original_inventory_url", "source_status",
         "guide", "year", "source_location", "block_order", "occurrence_order", "pattern_type",
-        "address_completeness", "candidate_name", "name_basis", "raw_address", "evidence_excerpt",
+        "address_completeness", "candidate_name", "name_basis", "name_confidence",
+        "raw_address", "canonical_source_address", "locality_hint", "evidence_excerpt",
         "auxiliary_provider", "auxiliary_name", "auxiliary_address", "auxiliary_latitude", "auxiliary_longitude",
-        "google_verification_status", "google_query", "google_match_basis", "google_result_name",
-        "google_result_address", "google_latitude", "google_longitude", "google_maps_url", "google_categories",
-        "google_official_website", "official_website_check", "decision", "merged_public_key", "exclusion_reason",
+        "auxiliary_place_id", "auxiliary_google_maps_url",
+        "google_verification_status", "verification_method", "google_query", "google_match_basis",
+        "google_result_name", "google_result_address", "google_latitude", "google_longitude",
+        "google_maps_url", "google_categories", "google_official_website", "official_website_check",
+        "decision", "merged_public_key", "exclusion_reason",
     ]
     write_csv(OUTDIR / f"{GUIDE_LABEL} - source occurrence ledger.csv", occurrence_fields, occurrences)
     write_csv(
         OUTDIR / f"{GUIDE_LABEL} - source evidence ledger.csv",
-        ["normalized_public_key", "published_name", "published_address", "source_url", "guide", "year", "occurrence_id", "occurrence_order", "evidence_excerpt", "google_match_basis", "official_website_check"],
+        ["normalized_public_key", "published_name", "published_address", "source_url", "guide", "year",
+         "occurrence_id", "occurrence_order", "source_address_as_published", "evidence_excerpt",
+         "name_basis", "name_confidence", "verification_method", "google_match_basis", "official_website_check"],
         evidence_rows,
     )
     exclusion_fields = [
