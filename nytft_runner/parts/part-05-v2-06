@@ -1,0 +1,100 @@
+    if not s or len(s) > 220:
+        return False
+    low = s.lower()
+    if any(x in low for x in ("http://", "https://", "/url?q=", "opi=", "ved=", "usg=", "google.com", "maps.google", "staticmap", "api=")):
+        return False
+    if re.search(r"\b\d{1,5}(?:-\d{1,5})?\b", s) and (
+        re.search(rf"\b(?:{_V2_FULL_SUFFIX}|{_V2_ABBR_SUFFIX}\.?)\b", s, re.I)
+        or ZIP_RE.search(s)
+        or re.search(r"\b(?:New York|Brooklyn|Queens|Bronx|NY|NJ|London|Paris|Tokyo)\b", s, re.I)
+    ):
+        return True
+    return False
+
+
+def _recursive_strings(obj: Any, limit: int = 500) -> list[str]:
+    out: list[str] = []
+    def walk(x: Any) -> None:
+        if len(out) >= limit:
+            return
+        if isinstance(x, str):
+            out.append(normalize_space(x))
+        elif isinstance(x, list):
+            for y in x:
+                walk(y)
+        elif isinstance(x, dict):
+            for y in x.values():
+                walk(y)
+    walk(obj)
+    return out
+
+
+def parse_google_maps_response(text: str, source_name: str = "", source_address: str = "") -> list[dict[str, Any]]:
+    payload = text.strip()
+    if payload.startswith(")]}'"):
+        payload = payload.split("\n", 1)[1] if "\n" in payload else payload[4:]
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return []
+    places: list[dict[str, Any]] = []
+    seen: set[tuple[str, float, float]] = set()
+
+    def recurse(obj: Any) -> None:
+        if isinstance(obj, list):
+            for i, item in enumerate(obj):
+                if isinstance(item, str) and re.fullmatch(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", item):
+                    coords: tuple[float, float] | None = None
+                    for candidate in obj[max(0, i - 15):i + 1]:
+                        if isinstance(candidate, list) and len(candidate) >= 4:
+                            lat, lng = candidate[2], candidate[3]
+                            if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and -90 <= float(lat) <= 90 and -180 <= float(lng) <= 180:
+                                coords = (float(lat), float(lng))
+                    name = ""
+                    for candidate in obj[i + 1:i + 8]:
+                        if isinstance(candidate, str) and candidate and not candidate.startswith("0x") and not candidate.startswith("http"):
+                            name = normalize_space(candidate)
+                            break
+                    if coords and name:
+                        nearby = obj[max(0, i - 30):min(len(obj), i + 50)]
+                        strings = _recursive_strings(nearby)
+                        address_candidates: list[str] = []
+                        # Direct string candidates.
+                        for s in strings:
+                            if _looks_like_map_address(s):
+                                if norm_identity(name) and norm_identity(name) in norm_identity(s) and len(s) > len(name) + 3:
+                                    pos = ascii_fold(s).lower().find(ascii_fold(name).lower())
+                                    tail = s[pos + len(name):].lstrip(" ,-") if pos >= 0 else s
+                                    if _looks_like_map_address(tail):
+                                        address_candidates.append(tail)
+                                address_candidates.append(s)
+                        # Structured [street, locality] candidates.
+                        def scan_lists(x: Any) -> None:
+                            if isinstance(x, list):
+                                if 1 <= len(x) <= 4 and all(isinstance(y, str) for y in x):
+                                    parts = [normalize_space(y) for y in x if normalize_space(y)]
+                                    joined = ", ".join(parts)
+                                    if _looks_like_map_address(joined):
+                                        address_candidates.append(joined)
+                                for y in x:
+                                    scan_lists(y)
+                            elif isinstance(x, dict):
+                                for y in x.values():
+                                    scan_lists(y)
+                        scan_lists(nearby)
+                        # Deduplicate and select the address closest to the source address.
+                        unique_addresses = []
+                        seen_addr = set()
+                        for a in address_candidates:
+                            key = norm_address(a)
+                            if key and key not in seen_addr:
+                                seen_addr.add(key)
+                                unique_addresses.append(a)
+                        address = ""
+                        if unique_addresses:
+                            scored = []
+                            for a in unique_addresses:
+                                ok, score, _ = address_similarity(source_address, a) if source_address else (False, 0.0, "")
+                                completeness = 0.15 if ZIP_RE.search(a) else 0.0
+                                city = 0.10 if re.search(r"\b(?:New York|Brooklyn|Queens|Bronx|NY|NJ|London|Paris|Tokyo)\b", a, re.I) else 0.0
+                                scored.append(((1.0 if ok else score) + completeness + city, a))
