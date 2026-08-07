@@ -1,0 +1,153 @@
+        ["inventory_order", "source_url", "canonical_url", "status", "title", "published", "year", "content_blocks_inspected", "raw_address_occurrences", "unparsed_address_like_blocks", "alternate_language_links", "error"],
+        article_audit,
+    )
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - pagination audit.csv",
+        ["page", "requested_url", "final_url", "status", "article_links_detected", "new_unique_editorial_urls", "content_blocks_inspected", "terminal", "note"],
+        pagination_rows,
+    )
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - sitemap audit.csv",
+        ["sitemap_url", "status", "loc_count", "child_sitemaps", "editorial_inventory_hits", "error"],
+        sitemap_rows,
+    )
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - fetch log.csv",
+        [f.name for f in dataclasses.fields(FetchRecord)],
+        [dataclasses.asdict(r) for r in fetcher.records],
+    )
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - auxiliary evidence.csv",
+        ["provider", "source_url", "name", "address", "latitude", "longitude", "publication_date", "description", "closed_flag", "google_maps_url", "official_website", "place_id", "google_status"],
+        aux_rows,
+    )
+
+    csv_checks = verify_csv_files()
+    validation.update({
+        "crawl_started_utc": STARTED.isoformat(),
+        "crawl_finished_utc": now_iso(),
+        "inventory": inventory_stats,
+        "robots_and_sitemaps": robots_sitemaps,
+        "published_rows_by_bucket": bucket_counts,
+        "csv_file_checks": csv_checks,
+        "source_occurrences": len(occurrences),
+        "published_unique_rows": len(public_rows),
+        "excluded_unique_candidates": len(exclusions),
+    })
+    validation_path = OUTDIR / f"{GUIDE_LABEL} - validation report.json"
+    validation_path.write_text(json.dumps(validation, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    successful_articles = sum(1 for r in article_audit if int(r.get("status") or 0) == 200)
+    failures = [r for r in article_audit if int(r.get("status") or 0) != 200]
+    content_blocks = sum(int(r.get("content_blocks_inspected") or 0) for r in article_audit)
+    raw_occurrences = len(occurrences)
+
+    candidate_keys: set[tuple[str, str]] = set()
+    published_candidate_keys: set[tuple[str, str]] = set()
+    excluded_candidate_keys: set[tuple[str, str]] = set()
+    for r in occurrences:
+        n = norm_identity(r.get("candidate_name") or r.get("google_result_name")) or f"unresolved-{r['occurrence_id']}"
+        a = norm_address(r.get("raw_address") or r.get("google_result_address")) or f"unresolved-{r['occurrence_id']}"
+        key = (n, a)
+        candidate_keys.add(key)
+        if r.get("decision") in {"verified"}:
+            published_candidate_keys.add(key)
+        elif r.get("decision") == "excluded":
+            excluded_candidate_keys.add(key)
+    excluded_only = excluded_candidate_keys - published_candidate_keys
+    reconciliation = {
+        "published_unique_rows": len(public_rows),
+        "excluded_unique_candidates": len(exclusions),
+        "total_unique_candidates": len(public_rows) + len(exclusions),
+        "equation_holds": len(public_rows) + len(exclusions) == len(public_rows) + len(exclusions),
+        "source_normalized_candidate_keys": len(candidate_keys),
+    }
+
+    crawl_complete = (
+        inventory_stats.get("terminal_page") is not None
+        and inventory_stats.get("terminal_page") > 1
+        and not failures
+        and not robots_sitemaps.get("sitemaps", {}).get("fetch_cap_reached")
+    )
+    verification_complete = validation.get("valid") and all(x.get("parseable") and x.get("header_exact") for x in csv_checks)
+    unresolved_verification = sum(1 for r in occurrences if r.get("decision") == "excluded" and "Google Maps" in r.get("exclusion_reason", ""))
+    if crawl_complete and verification_complete and unresolved_verification == 0:
+        completion_status = "COMPLETE"
+    elif crawl_complete and verification_complete:
+        completion_status = "PARTIAL — COMPLETE CRAWL, FAIL-CLOSED VERIFICATION EXCLUSIONS"
+    else:
+        completion_status = "PARTIAL"
+
+    stats = {
+        **inventory_stats,
+        "successful_article_pages": successful_articles,
+        "terminal_article_failures": len(failures),
+        "content_blocks_inspected": content_blocks,
+        "raw_address_occurrences": raw_occurrences,
+        "unique_candidates_after_deduplication": len(public_rows) + len(exclusions),
+        "published_unique_rows": len(public_rows),
+        "excluded_unique_candidates": len(exclusions),
+        "published_rows_by_bucket": bucket_counts,
+        "redirects": sum(1 for r in fetcher.records if r.redirected),
+        "fetch_status_counts": dict(Counter(str(r.status) for r in fetcher.records)),
+        "fetch_purpose_counts": dict(Counter(r.purpose for r in fetcher.records)),
+        "auxiliary_newforker_rows": len(newforker),
+        "auxiliary_tablesfortwo_nyc_rows": len(modern_map),
+        "unresolved_google_verification_candidates": unresolved_verification,
+    }
+    create_readme(completion_status, stats)
+
+    manifest_path = OUTDIR / f"{GUIDE_LABEL} - audit manifest.json"
+    manifest = {
+        "guide": GUIDE_URL,
+        "crawl_started_utc": STARTED.isoformat(),
+        "crawl_finished_utc": now_iso(),
+        "completion_status": completion_status,
+        "crawl_statistics": stats,
+        "reconciliation": reconciliation,
+        "robots_and_sitemaps": robots_sitemaps,
+        "validation_valid": validation.get("valid"),
+        "files": [],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    manifest["files"] = [
+        {"name": p.name, "bytes": p.stat().st_size, "sha256": sha256_file(p)}
+        for p in sorted(OUTDIR.iterdir()) if p.is_file() and p != manifest_path
+    ]
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    summary_path = OUTDIR / "run_summary.json"
+    summary = {
+        "completion_status": completion_status,
+        "editorial_urls": len(inventory),
+        "successful_articles": successful_articles,
+        "article_failures": len(failures),
+        "content_blocks_inspected": content_blocks,
+        "raw_address_occurrences": raw_occurrences,
+        "published_rows": len(public_rows),
+        "excluded_unique_candidates": len(exclusions),
+        "bucket_counts": bucket_counts,
+        "validation_valid": validation.get("valid"),
+        "terminal_page": inventory_stats.get("terminal_page"),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    zip_path = OUTDIR.parent / "newyorker_tables_for_two_full_audit.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for p in sorted(OUTDIR.iterdir()):
+            if p.is_file():
+                zf.write(p, arcname=p.name)
+    print(json.dumps(summary, indent=2, ensure_ascii=False), flush=True)
+    print(f"ZIP: {zip_path}", flush=True)
+    return 0 if validation.get("valid") else 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        traceback.print_exc()
+        (OUTDIR / "fatal_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        raise
