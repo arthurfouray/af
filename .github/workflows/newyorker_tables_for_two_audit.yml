@@ -5,6 +5,11 @@ on:
     paths:
       - scripts/newyorker_tables_for_two_audit.py
       - .github/workflows/newyorker_tables_for_two_audit.yml
+  pull_request:
+    paths:
+      - scripts/newyorker_tables_for_two_audit.py
+      - .github/workflows/newyorker_tables_for_two_audit.yml
+      - audit-triggers/**
   workflow_dispatch:
 
 jobs:
