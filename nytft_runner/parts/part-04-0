@@ -1,0 +1,190 @@
+                "Candidate Address": r.get("raw_address") or r.get("google_result_address") or r.get("evidence_excerpt", ""),
+                "Source URL": r.get("source_url", ""),
+                "Guide": r.get("guide", ""),
+                "Year": r.get("year", ""),
+                "Occurrence ID": r.get("occurrence_id", ""),
+                "Decision": r.get("decision", ""),
+                "Exclusion Reason": r.get("exclusion_reason", ""),
+                "Google Result Name": r.get("google_result_name", ""),
+                "Google Result Address": r.get("google_result_address", ""),
+                "Evidence Excerpt": r.get("evidence_excerpt", ""),
+            }
+    exclusions = sorted(exclusions_by_key.values(), key=lambda r: (r["Source URL"], r["Occurrence ID"]))
+    return public_rows, evidence_rows, exclusions
+
+
+def validate_public_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    errors: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for i, row in enumerate(rows, 2):
+        for field in PUBLIC_HEADER:
+            value = str(row.get(field, "")).strip()
+            if not value:
+                errors.append({"row": i, "field": field, "error": "blank required field"})
+            elif value.lower() in PLACEHOLDERS:
+                errors.append({"row": i, "field": field, "error": "placeholder value"})
+        try:
+            lat_s, lng_s = [x.strip() for x in row["Latitude and longitude"].split(",", 1)]
+            lat, lng = float(lat_s), float(lng_s)
+            if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                raise ValueError("out of WGS84 range")
+        except Exception as exc:
+            errors.append({"row": i, "field": "Latitude and longitude", "error": f"invalid coordinates: {exc}"})
+        if not re.match(r"^https://www\.newyorker\.com/(?:magazine|culture)/", row.get("Source URL", "")):
+            errors.append({"row": i, "field": "Source URL", "error": "noncanonical New Yorker source URL"})
+        if not re.match(r"^https://(?:www\.)?(?:google\.com/maps|maps\.google\.com)/", row.get("Google Maps URL", "")):
+            errors.append({"row": i, "field": "Google Maps URL", "error": "malformed Google Maps URL"})
+        if not re.fullmatch(r"\d{4}", str(row.get("Year", ""))):
+            errors.append({"row": i, "field": "Year", "error": "year is not four digits"})
+        if not str(row.get("Priority", "")).isdigit() or int(row["Priority"]) < 1:
+            errors.append({"row": i, "field": "Priority", "error": "priority is not a positive integer"})
+        key = (norm_identity(row.get("Name", "")), norm_address(row.get("Address", "")))
+        if key in seen:
+            errors.append({"row": i, "field": "Name/Address", "error": "normalized duplicate"})
+        seen.add(key)
+        if int(row.get("_bucket", 0)) not in BUCKET_FILES:
+            errors.append({"row": i, "field": "_bucket", "error": "invalid bucket assignment"})
+    return {
+        "valid": not errors,
+        "row_count": len(rows),
+        "error_count": len(errors),
+        "errors": errors,
+        "checks": {
+            "exact_header": True,
+            "required_fields_nonblank": not any(e["error"] == "blank required field" for e in errors),
+            "no_placeholders": not any(e["error"] == "placeholder value" for e in errors),
+            "coordinates_valid": not any(e["field"] == "Latitude and longitude" for e in errors),
+            "source_urls_canonical": not any(e["field"] == "Source URL" for e in errors),
+            "google_maps_urls_valid": not any(e["field"] == "Google Maps URL" for e in errors),
+            "normalized_duplicates_absent": not any(e["error"] == "normalized duplicate" for e in errors),
+            "bucket_assignments_valid": not any(e["field"] == "_bucket" for e in errors),
+        },
+    }
+
+
+def verify_csv_files() -> list[dict[str, Any]]:
+    results = []
+    for bucket, filename in BUCKET_FILES.items():
+        path = OUTDIR / filename
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                header = reader.fieldnames
+            results.append({
+                "file": filename,
+                "bucket": bucket,
+                "parseable": True,
+                "header_exact": header == PUBLIC_HEADER,
+                "rows": len(rows),
+                "blank_required_fields": sum(1 for row in rows if any(not str(row.get(k, "")).strip() for k in PUBLIC_HEADER)),
+            })
+        except Exception as exc:
+            results.append({"file": filename, "bucket": bucket, "parseable": False, "header_exact": False, "rows": 0, "blank_required_fields": 0, "error": str(exc)})
+    return results
+
+
+def create_readme(status: str, stats: dict[str, Any]) -> None:
+    text = f"""# The New Yorker — Tables for Two physical-address audit
+
+Crawl started: {STARTED.isoformat()}  
+Crawl completed: {now_iso()}  
+Completion status: **{status}**
+
+## Scope and inventory
+
+The audit crawled the live `Tables for Two` section by explicit pagination from page 0 through the terminal page, inspected every discovered editorial URL, audited `robots.txt` and declared sitemaps, and checked the article's metadata, JSON-LD, embedded structured data, headings, body paragraphs, captions, and address fields. Page 0 is audited separately because it may alias page 1.
+
+## Fail-closed publication rule
+
+A row enters a public CSV only when the source publishes a complete street address and associates it with a venue, the direct source URL resolved successfully, Google Maps returned a matching venue identity and the same building/street, the coordinates were valid WGS84 values, and the Maps URL was generated from the verified place result. Candidates lacking any required proof remain in `exclusions.csv`.
+
+Official venue websites supplied by Google Maps were fetched when available. A failed or absent official site does not override a successful source-plus-Google verification, but the result is retained in the occurrence ledger.
+
+## Public CSV schema
+
+Every public CSV has this exact header and order:
+
+`{','.join(PUBLIC_HEADER)}`
+
+Priority is deterministic occurrence order within the source. Year is the source publication year. Duplicate venue-location pairs are merged only after normalized identity and verified physical-address agreement; all source appearances remain in the source occurrence and evidence ledgers.
+
+## Classification
+
+1. Restaurants, cafés, bars, pubs, wine bars, cellars, and food/drink venues.  
+2. Retail, markets, grocers, bookshops, design shops, and retail-first food shops.  
+3. Museums, galleries, theatres, archives, and cultural institutions.  
+4. Nightlife, clubs, festivals, spas, sports, tours, entertainment, leisure, and other addressable activities.  
+5. Monuments, landmarks, viewpoints, historic sites, and addressable scenic attractions.  
+6. Hotels and other accommodation.
+
+Classification follows the venue's primary function in the source context, then Google Maps type evidence.
+
+## Filename normalization
+
+Literal URLs cannot be used as a single cross-platform filename because `/` is a path separator. The guide prefix is therefore losslessly normalized to `{GUIDE_LABEL}`.
+
+## Accounting
+
+- Editorial URLs discovered: {stats.get('editorial_urls_discovered', 0)}
+- Successful article pages: {stats.get('successful_article_pages', 0)}
+- Terminal article failures: {stats.get('terminal_article_failures', 0)}
+- Content blocks inspected: {stats.get('content_blocks_inspected', 0)}
+- Raw address occurrences: {stats.get('raw_address_occurrences', 0)}
+- Unique candidates after deduplication: {stats.get('unique_candidates_after_deduplication', 0)}
+- Published unique rows: {stats.get('published_unique_rows', 0)}
+- Excluded unique candidates: {stats.get('excluded_unique_candidates', 0)}
+
+The audit manifest contains checksums, per-file row counts, fetch statistics, reconciliation, and completion logic.
+"""
+    (OUTDIR / f"{GUIDE_LABEL} - README.md").write_text(text, encoding="utf-8")
+
+
+def main() -> int:
+    print(f"Audit started: {STARTED.isoformat()}", flush=True)
+    inventory, pagination_rows, inventory_stats = discover_inventory()
+    print(f"Inventory discovered: {len(inventory)} editorial URLs; terminal page={inventory_stats.get('terminal_page')}", flush=True)
+
+    robots_sitemaps, sitemap_rows = audit_robots_and_sitemaps(set(inventory))
+    newforker = fetch_newforker()
+    modern_map = fetch_tablesfortwo_map()
+    aux_rows = newforker + modern_map
+    aux_index = build_aux_index(aux_rows)
+    print(f"Auxiliary evidence: New Forker={len(newforker)}, tablesfortwo.nyc={len(modern_map)}", flush=True)
+
+    articles = fetch_all_articles(inventory)
+    occurrences, article_audit = build_occurrences(articles, aux_index)
+    print(f"Address occurrences detected before verification: {len(occurrences)}", flush=True)
+
+    verify_occurrences(occurrences)
+    verify_official_sites(occurrences)
+    public_rows, evidence_rows, exclusions = build_public_rows(occurrences)
+    validation = validate_public_rows(public_rows)
+
+    bucket_counts: dict[str, int] = {}
+    for bucket, filename in BUCKET_FILES.items():
+        bucket_rows = [{k: row[k] for k in PUBLIC_HEADER} for row in public_rows if int(row["_bucket"]) == bucket]
+        bucket_counts[str(bucket)] = write_csv(OUTDIR / filename, PUBLIC_HEADER, bucket_rows)
+
+    occurrence_fields = [
+        "occurrence_id", "inventory_order", "source_url", "original_inventory_url", "source_status",
+        "guide", "year", "source_location", "block_order", "occurrence_order", "pattern_type",
+        "address_completeness", "candidate_name", "name_basis", "raw_address", "evidence_excerpt",
+        "auxiliary_provider", "auxiliary_name", "auxiliary_address", "auxiliary_latitude", "auxiliary_longitude",
+        "google_verification_status", "google_query", "google_match_basis", "google_result_name",
+        "google_result_address", "google_latitude", "google_longitude", "google_maps_url", "google_categories",
+        "google_official_website", "official_website_check", "decision", "merged_public_key", "exclusion_reason",
+    ]
+    write_csv(OUTDIR / f"{GUIDE_LABEL} - source occurrence ledger.csv", occurrence_fields, occurrences)
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - source evidence ledger.csv",
+        ["normalized_public_key", "published_name", "published_address", "source_url", "guide", "year", "occurrence_id", "occurrence_order", "evidence_excerpt", "google_match_basis", "official_website_check"],
+        evidence_rows,
+    )
+    exclusion_fields = [
+        "Candidate Name", "Candidate Address", "Source URL", "Guide", "Year", "Occurrence ID", "Decision",
+        "Exclusion Reason", "Google Result Name", "Google Result Address", "Evidence Excerpt",
+    ]
+    write_csv(OUTDIR / f"{GUIDE_LABEL} - exclusions.csv", exclusion_fields, exclusions)
+    write_csv(
+        OUTDIR / f"{GUIDE_LABEL} - article audit.csv",
