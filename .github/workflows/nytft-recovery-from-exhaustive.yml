@@ -45,6 +45,13 @@ jobs:
           repository: arthurfouray/af
           run-id: 31206158007
 
+      - name: Normalize labeled audit filenames
+        run: |
+          robots=$(find input_artifact -type f -name '* - robots.txt' -print -quit)
+          test -n "$robots"
+          cp "$robots" input_artifact/robots.txt
+          find input_artifact -maxdepth 3 -type f -printf '%p\n' | sort | sed -n '1,80p'
+
       - name: Recover and rebuild
         id: recover
         env:
