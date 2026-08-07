@@ -1,0 +1,92 @@
+name: New Yorker Tables for Two recovery from exhaustive crawl
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nytft-recovery-from-exhaustive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover-exhaustive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml urllib3
+
+      - name: Reconstruct and compile recovery program
+        run: |
+          mkdir -p scripts
+          cat recovery_payload/nytft_recover.py.gz.b64.part00 \
+              recovery_payload/nytft_recover.py.gz.b64.part01 \
+              recovery_payload/nytft_recover.py.gz.b64.part02 \
+            | base64 --decode | gzip --decompress > scripts/nytft_recover.py
+          python -m py_compile scripts/nytft_recover.py
+          sha256sum scripts/nytft_recover.py | tee recovery-script.sha256
+
+      - name: Download exhaustive crawl artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: newyorker-tables-for-two-full-audit
+          path: input_artifact
+          github-token: ${{ github.token }}
+          repository: arthurfouray/af
+          run-id: 31206158007
+
+      - name: Recover and rebuild
+        id: recover
+        env:
+          INPUT_ROOT: ${{ github.workspace }}/input_artifact
+          OUTPUT_DIR: ${{ github.workspace }}/recovered_output_full
+          GOOGLE_DELAY: '0.25'
+          GEOCODER_DELAY: '0.15'
+          RECOVERY_WORKERS: '6'
+          REQUEST_TIMEOUT: '25'
+          MAX_RETRIES: '4'
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python -u scripts/nytft_recover.py 2>&1 | tee recovery-from-exhaustive.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Inspect package
+        if: always()
+        run: |
+          echo "Recovery exit code: ${{ steps.recover.outputs.exit_code }}"
+          find recovered_output_full -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort || true
+          cat recovered_output_full/run_summary.json || true
+          ls -lh newyorker_tables_for_two_recovered_audit.zip || true
+
+      - name: Upload recovery artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newyorker_tables_for_two_recovered_from_exhaustive
+          path: |
+            recovered_output_full/**
+            newyorker_tables_for_two_recovered_audit.zip
+            recovery-from-exhaustive.log
+            recovery-script.sha256
+            scripts/nytft_recover.py
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+
+      - name: Propagate validation failure after upload
+        if: always()
+        run: test "${{ steps.recover.outputs.exit_code }}" = "0"
