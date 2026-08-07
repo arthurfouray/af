@@ -1,0 +1,36 @@
+name: New Yorker Tables for Two audit
+
+on:
+  push:
+    paths:
+      - scripts/newyorker_tables_for_two_audit.py
+      - .github/workflows/newyorker_tables_for_two_audit.yml
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml urllib3
+      - name: Run live crawl and verification
+        env:
+          OUTPUT_DIR: newyorker_tables_for_two_audit
+        run: |
+          python scripts/newyorker_tables_for_two_audit.py
+      - name: Upload audit package
+        uses: actions/upload-artifact@v4
+        with:
+          name: newyorker_tables_for_two_full_audit_raw
+          path: |
+            newyorker_tables_for_two_audit/**
+            newyorker_tables_for_two_full_audit_raw.zip
+          if-no-files-found: error
+          retention-days: 7
