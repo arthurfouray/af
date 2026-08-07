@@ -141,13 +141,3 @@
     print(f"ZIP: {zip_path}", flush=True)
     return 0 if validation.get("valid") else 2
 
-
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except KeyboardInterrupt:
-        raise
-    except Exception:
-        traceback.print_exc()
-        (OUTDIR / "fatal_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        raise
