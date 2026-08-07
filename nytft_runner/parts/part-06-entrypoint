@@ -1,0 +1,9 @@
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        traceback.print_exc()
+        (OUTDIR / "fatal_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        raise

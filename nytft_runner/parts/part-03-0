@@ -1,0 +1,190 @@
+            "error": article.get("error", ""),
+        })
+    return occurrences, article_audit
+
+
+def parse_google_maps_response(text: str) -> list[dict[str, Any]]:
+    payload = text.strip()
+    if payload.startswith(")]}'"):
+        payload = payload.split("\n", 1)[1] if "\n" in payload else payload[4:]
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return []
+
+    places: list[dict[str, Any]] = []
+    seen: set[tuple[str, float, float]] = set()
+
+    def strings_in(obj: Any, limit: int = 200) -> list[str]:
+        out: list[str] = []
+        def walk(x: Any) -> None:
+            if len(out) >= limit:
+                return
+            if isinstance(x, str):
+                out.append(normalize_space(x))
+            elif isinstance(x, list):
+                for y in x:
+                    walk(y)
+            elif isinstance(x, dict):
+                for y in x.values():
+                    walk(y)
+        walk(obj)
+        return out
+
+    def recurse(obj: Any) -> None:
+        if isinstance(obj, list):
+            for i, item in enumerate(obj):
+                if isinstance(item, str) and re.fullmatch(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", item):
+                    coords: tuple[float, float] | None = None
+                    for candidate in obj[max(0, i - 12):i + 1]:
+                        if isinstance(candidate, list) and len(candidate) >= 4:
+                            lat, lng = candidate[2], candidate[3]
+                            if isinstance(lat, (int, float)) and isinstance(lng, (int, float)) and -90 <= float(lat) <= 90 and -180 <= float(lng) <= 180:
+                                coords = (float(lat), float(lng))
+                    name = ""
+                    for candidate in obj[i + 1:i + 8]:
+                        if isinstance(candidate, str) and candidate and not candidate.startswith("0x") and not candidate.startswith("http"):
+                            name = normalize_space(candidate)
+                            break
+                    if coords and name:
+                        nearby = obj[max(0, i - 24):min(len(obj), i + 35)]
+                        all_strings = strings_in(nearby)
+                        address = ""
+                        # Prefer a full string beginning with name and containing a number.
+                        for s in all_strings:
+                            if re.search(r"\d", s) and norm_identity(name) and norm_identity(name) in norm_identity(s) and len(s) > len(name) + 4:
+                                idx = ascii_fold(s).lower().find(ascii_fold(name).lower())
+                                tail = s[idx + len(name):].lstrip(" ,-") if idx >= 0 else s
+                                if re.search(r"\d", tail):
+                                    address = tail
+                                    break
+                        # Then a two-part [street, locality] list.
+                        if not address:
+                            for candidate in nearby:
+                                if isinstance(candidate, list) and 1 <= len(candidate) <= 4 and all(isinstance(x, str) for x in candidate):
+                                    parts = [normalize_space(x) for x in candidate if normalize_space(x)]
+                                    if parts and re.search(r"\d", parts[0]) and len(" ".join(parts)) < 180:
+                                        address = ", ".join(parts)
+                                        break
+                        website = ""
+                        place_id = ""
+                        categories: list[str] = []
+                        for s in all_strings:
+                            if re.fullmatch(r"ChI[A-Za-z0-9_-]{10,}", s):
+                                place_id = s
+                            if s.startswith("http") and "google." not in urllib.parse.urlparse(s).netloc:
+                                website = s
+                        for candidate in obj[i + 1:i + 12]:
+                            if isinstance(candidate, list) and candidate and all(isinstance(x, str) for x in candidate):
+                                vals = [normalize_space(x) for x in candidate if normalize_space(x)]
+                                if vals and len(vals) <= 6 and not any(re.search(r"\d", x) for x in vals):
+                                    categories = vals
+                                    break
+                        try:
+                            cid = str(int(item.split(":", 1)[1], 16))
+                        except Exception:
+                            cid = ""
+                        key = (norm_identity(name), round(coords[0], 7), round(coords[1], 7))
+                        if key not in seen:
+                            seen.add(key)
+                            maps_url = (
+                                f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name + ', ' + address)}&query_place_id={urllib.parse.quote(place_id)}"
+                                if place_id else (f"https://maps.google.com/?cid={cid}" if cid else "")
+                            )
+                            places.append({
+                                "name": name,
+                                "address": address,
+                                "latitude": coords[0],
+                                "longitude": coords[1],
+                                "place_hex": item,
+                                "cid": cid,
+                                "place_id": place_id,
+                                "maps_url": maps_url,
+                                "website": website,
+                                "categories": categories,
+                            })
+                recurse(item)
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                recurse(value)
+
+    recurse(data)
+    return places
+
+
+def google_maps_lookup(name: str, address: str) -> dict[str, Any]:
+    query = ", ".join(x for x in [name, address] if x)
+    url = "https://www.google.com/search?" + urllib.parse.urlencode({
+        "tbm": "map", "authuser": "0", "hl": "en", "gl": "us", "q": query,
+    })
+    response = fetcher.get(
+        url, "google-maps-verification", delay=MAP_DELAY, timeout=30,
+        headers={"Accept": "application/json,text/plain,*/*", "User-Agent": USER_AGENT},
+    )
+    if response is None or response.status_code != 200:
+        return {"ok": False, "query": query, "request_url": url, "status": response.status_code if response is not None else 0, "places": [], "reason": "Google Maps request failed"}
+    places = parse_google_maps_response(response.text)
+    return {"ok": bool(places), "query": query, "request_url": url, "status": response.status_code, "places": places, "reason": "" if places else "no parseable Google Maps place result"}
+
+
+def choose_google_place(name: str, source_address: str, places: list[dict[str, Any]], aux: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str, float]:
+    best: dict[str, Any] | None = None
+    best_score = -1.0
+    best_reason = ""
+    for place in places[:12]:
+        ns = name_similarity(name, place.get("name", ""))
+        addr_ok, addr_score, addr_reason = address_similarity(source_address, place.get("address", ""))
+        coord_bonus = 0.0
+        if aux and aux.get("latitude") not in {None, ""} and aux.get("longitude") not in {None, ""}:
+            try:
+                alat, alng = float(aux["latitude"]), float(aux["longitude"])
+                dist = math.hypot((alat - float(place["latitude"])) * 111.0, (alng - float(place["longitude"])) * 85.0)
+                if dist < 0.15:
+                    coord_bonus = 0.40
+                elif dist < 1.0:
+                    coord_bonus = 0.15
+            except Exception:
+                pass
+        score = ns * 1.2 + (1.0 if addr_ok else addr_score * 0.5) + coord_bonus
+        reason = f"name={ns:.3f}; address={addr_score:.3f} ({addr_reason}); auxiliary-coordinate-bonus={coord_bonus:.2f}"
+        if score > best_score:
+            best, best_score, best_reason = place, score, reason
+    if best is None:
+        return None, "no Google Maps candidates", 0.0
+    ns = name_similarity(name, best.get("name", ""))
+    addr_ok, _, addr_reason = address_similarity(source_address, best.get("address", ""))
+    if ns < 0.64:
+        return None, f"Google Maps identity conflict: {best_reason}", best_score
+    if not addr_ok:
+        return None, f"Google Maps address conflict: {addr_reason}; {best_reason}", best_score
+    return best, best_reason, best_score
+
+
+def country_complete_address(address: str) -> str:
+    address = normalize_space(address)
+    if not address:
+        return ""
+    if re.search(r"\b(?:United States|USA|United Kingdom|UK|France|Italy|Germany|Spain|Japan|China|Canada|Mexico|Brazil|Greece|Switzerland|Austria|Belgium|Netherlands|Portugal)\b", address, re.I):
+        return address
+    # The archive is overwhelmingly New York; Maps output with NY/NYC is U.S.
+    if re.search(r"\b(?:NY|New York|Brooklyn|Queens|Bronx|Manhattan|Staten Island|NJ|New Jersey)\b", address, re.I):
+        return address.rstrip(" ,") + ", United States"
+    return address
+
+
+def verify_occurrences(occurrences: list[dict[str, Any]]) -> None:
+    cache: dict[tuple[str, str], dict[str, Any]] = {}
+    pending = [r for r in occurrences if r.get("decision") == "pending"]
+    for i, record in enumerate(pending, 1):
+        name = record.get("candidate_name", "")
+        source_address = record.get("raw_address", "")
+        key = (norm_identity(name), norm_address(source_address))
+        if key not in cache:
+            cache[key] = google_maps_lookup(name, source_address)
+        lookup = cache[key]
+        record["google_query"] = lookup.get("query", "")
+        if not lookup.get("ok"):
+            record["decision"] = "excluded"
+            record["google_verification_status"] = "failed"
+            record["exclusion_reason"] = lookup.get("reason", "Google Maps verification failed")
+            continue

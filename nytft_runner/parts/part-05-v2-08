@@ -1,0 +1,100 @@
+    try:
+        alat, alng = float(aux["latitude"]), float(aux["longitude"])
+        return math.hypot((alat - float(place["latitude"])) * 111.0, (alng - float(place["longitude"])) * 85.0)
+    except Exception:
+        return None
+
+
+def choose_google_place(name: str, source_address: str, places: list[dict[str, Any]], aux: dict[str, Any] | None = None, name_confidence: float = 0.0) -> tuple[dict[str, Any] | None, str, float, str]:
+    best_exact: tuple[float, dict[str, Any], str] | None = None
+    best_address: tuple[float, dict[str, Any], str] | None = None
+    for place in places[:30]:
+        ns = name_similarity(name, place.get("name", ""))
+        addr_ok, addr_score, addr_reason = address_similarity(source_address, place.get("address", ""))
+        dist = _coordinate_distance_km(place, aux)
+        coord_bonus = 0.45 if dist is not None and dist < 0.15 else (0.20 if dist is not None and dist < 1.0 else 0.0)
+        exact_score = ns * 1.35 + (1.0 if addr_ok else addr_score * 0.45) + coord_bonus
+        reason = f"name={ns:.3f}; address={addr_score:.3f} ({addr_reason}); auxiliary_distance_km={dist if dist is not None else 'n/a'}"
+        if ns >= 0.64 and addr_ok and (best_exact is None or exact_score > best_exact[0]):
+            best_exact = (exact_score, place, reason)
+        if addr_ok:
+            address_score = (1.0 if addr_ok else addr_score) + coord_bonus + (0.20 if place.get("query_kind") == "address" else 0.0)
+            if best_address is None or address_score > best_address[0]:
+                best_address = (address_score, place, reason)
+    if best_exact:
+        return best_exact[1], best_exact[2], best_exact[0], "google-place-identity-and-address"
+    # Historical/closed venue fallback: direct source establishes identity; Google Maps
+    # must independently geocode the exact building/street. Only strong source association qualifies.
+    if best_address and name_confidence >= 0.90:
+        return best_address[1], best_address[2], best_address[0], "historical-source-identity-plus-google-address-geocode"
+    return None, "no Google Maps candidate met identity/address or strong historical-address criteria", 0.0, ""
+
+
+def verify_occurrences(occurrences: list[dict[str, Any]]) -> None:
+    cache: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    pending = [r for r in occurrences if r.get("decision") == "pending"]
+    for i, record in enumerate(pending, 1):
+        name = record.get("candidate_name", "")
+        source_address = record.get("raw_address", "")
+        locality_hint = record.get("locality_hint", "")
+        place_id = record.get("auxiliary_place_id", "")
+        key = (norm_identity(name), norm_address(source_address), locality_hint, place_id)
+        if key not in cache:
+            cache[key] = google_maps_lookup(name, source_address, locality_hint, place_id)
+        lookup = cache[key]
+        record["google_query"] = json.dumps(lookup.get("queries", []), ensure_ascii=False)
+        if not lookup.get("ok"):
+            record["decision"] = "excluded"
+            record["google_verification_status"] = "failed"
+            record["exclusion_reason"] = lookup.get("reason", "Google Maps verification failed")
+            continue
+        aux = {"latitude": record.get("auxiliary_latitude", ""), "longitude": record.get("auxiliary_longitude", "")}
+        try:
+            confidence = float(record.get("name_confidence") or 0.0)
+        except Exception:
+            confidence = 0.0
+        place, basis, _, method = choose_google_place(name, source_address, lookup.get("places", []), aux, confidence)
+        if place is None:
+            record["decision"] = "excluded"
+            record["google_verification_status"] = "conflict"
+            record["exclusion_reason"] = basis
+            if lookup.get("places"):
+                p = lookup["places"][0]
+                record.update({
+                    "google_result_name": p.get("name", ""), "google_result_address": p.get("address", ""),
+                    "google_latitude": p.get("latitude", ""), "google_longitude": p.get("longitude", ""),
+                    "google_maps_url": p.get("maps_url", ""), "google_categories": " | ".join(p.get("categories", [])),
+                    "google_official_website": p.get("website", "") or record.get("google_official_website", ""),
+                })
+            continue
+        full_address = country_complete_address(place.get("address", ""))
+        if not full_address:
+            record["decision"] = "excluded"
+            record["google_verification_status"] = "conflict"
+            record["exclusion_reason"] = "Google Maps matched a coordinate but did not expose a complete postal address"
+            continue
+        maps_url = place.get("maps_url", "") or (
+            "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{name}, {full_address}")
+        )
+        record.update({
+            "google_verification_status": "verified", "verification_method": method,
+            "google_match_basis": basis, "google_result_name": place.get("name", "") if method == "google-place-identity-and-address" else name,
+            "google_result_address": full_address, "google_latitude": place.get("latitude", ""),
+            "google_longitude": place.get("longitude", ""), "google_maps_url": maps_url,
+            "google_categories": " | ".join(place.get("categories", [])),
+            "google_official_website": place.get("website", "") or record.get("google_official_website", ""),
+            "decision": "verified",
+        })
+        if i % 100 == 0 or i == len(pending):
+            print(f"Google Maps verification V2: {i}/{len(pending)}", flush=True)
+
+
+# Repair the one malformed Dell'Anima inventory URL from the issue page when needed.
+_extract_article_v1 = extract_article
+
+def extract_article(url: str, inventory_order: int) -> dict[str, Any]:
+    result = _extract_article_v1(url, inventory_order)
+    if int(result.get("status") or 0) == 200 or "dellanima" not in url.lower():
+        return result
+    issue = fetcher.get("https://www.newyorker.com/magazine/2008/02/11", "inventory-url-repair")
+    if issue is not None and issue.status_code == 200:
