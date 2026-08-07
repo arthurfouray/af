@@ -1,0 +1,100 @@
+
+def _ordinal_suffix(number: int) -> str:
+    if 10 <= number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def _word_number(tokens: list[str]) -> int | None:
+    total = 0
+    current = 0
+    used = False
+    for token in tokens:
+        t = token.lower().strip(".,").replace("-", " ")
+        parts = t.split()
+        for part in parts:
+            if part in _CARDINAL_UNITS:
+                current += _CARDINAL_UNITS[part]
+                used = True
+            elif part in _CARDINAL_TENS:
+                current += _CARDINAL_TENS[part]
+                used = True
+            elif part == "hundred":
+                current = max(1, current) * 100
+                used = True
+            elif part == "thousand":
+                total += max(1, current) * 1000
+                current = 0
+                used = True
+            else:
+                return None
+    return total + current if used else None
+
+
+def _ordinal_word_to_number(value: str) -> int | None:
+    v = ascii_fold(value).lower().replace("-", " ").strip(" .,")
+    if v in _ORDINAL_BASE:
+        return _ORDINAL_BASE[v]
+    parts = v.split()
+    if len(parts) == 2 and parts[0] in _CARDINAL_TENS and parts[1] in _ORDINAL_BASE and _ORDINAL_BASE[parts[1]] < 10:
+        return _CARDINAL_TENS[parts[0]] + _ORDINAL_BASE[parts[1]]
+    return None
+
+
+def canonical_address_text(value: str) -> str:
+    s = normalize_space(value).replace("–", "-").replace("—", "-")
+    s = re.sub(r"\bNo\.\s*", "", s, flags=re.I)
+    # Convert a spelled-out house number only at the beginning.
+    tokens = s.split()
+    leading: list[str] = []
+    for token in tokens[:6]:
+        cleaned = ascii_fold(token).lower().strip(".,")
+        subparts = cleaned.replace("-", " ").split()
+        if all(p in _CARDINAL_UNITS or p in _CARDINAL_TENS or p in {"hundred", "thousand"} for p in subparts):
+            leading.append(token)
+        else:
+            break
+    if leading:
+        number = _word_number(leading)
+        if number is not None:
+            s = str(number) + s[len(" ".join(leading)):]
+    # Convert spelled ordinal street names anywhere.
+    ordinal_pattern = re.compile(rf"\b({ORDINAL_WORD})\b", re.I)
+    def repl_ordinal(m: re.Match[str]) -> str:
+        n = _ordinal_word_to_number(m.group(1))
+        return _ordinal_suffix(n) if n is not None else m.group(1)
+    s = ordinal_pattern.sub(repl_ordinal, s)
+    s = re.sub(r"\b(North|South|East|West)\b", lambda m: _DIRECTION_CANON[m.group(1).lower()], s, flags=re.I)
+    s = re.sub(r"\b(?:Street|St\.)\b", "St", s, flags=re.I)
+    s = re.sub(r"\b(?:Avenue|Ave\.)\b", "Ave", s, flags=re.I)
+    s = re.sub(r"\b(?:Road|Rd\.)\b", "Rd", s, flags=re.I)
+    s = re.sub(r"\b(?:Boulevard|Blvd\.)\b", "Blvd", s, flags=re.I)
+    s = re.sub(r"\b(?:Lane|Ln\.)\b", "Ln", s, flags=re.I)
+    s = re.sub(r"\b(?:Drive|Dr\.)\b", "Dr", s, flags=re.I)
+    s = re.sub(r"\b(?:Place|Pl\.)\b", "Pl", s, flags=re.I)
+    s = re.sub(r"\b(?:Court|Ct\.)\b", "Ct", s, flags=re.I)
+    s = re.sub(r"\b(?:Terrace|Ter\.)\b", "Ter", s, flags=re.I)
+    s = re.sub(r"\b(?:Parkway|Pkwy\.)\b", "Pkwy", s, flags=re.I)
+    s = re.sub(r"\b(?:Highway|Hwy\.)\b", "Hwy", s, flags=re.I)
+    s = re.sub(r"\s+", " ", s).strip(" ,.;")
+    return s
+
+
+def norm_address(value: Any) -> str:
+    s = ascii_fold(canonical_address_text(str(value or ""))).lower()
+    s = re.sub(r"\b(?:at|near|between|corner of|off)\b.*$", "", s)
+    s = s.replace("new york city", "new york")
+    return " ".join(re.sub(r"[^a-z0-9-]+", " ", s).split())
+
+
+def _spelled_address_is_plausible(raw: str) -> bool:
+    if not _V2_STRICT_SPELLED_FULL.fullmatch(raw):
+        return False
+    if _V2_OBVIOUS_PROSE.search(raw):
+        return False
+    parts = raw.split()
+    if len(parts) < 3:
+        return False
+    # Historical addresses preserve capitalization; prose false positives generally do not.
