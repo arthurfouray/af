@@ -1,0 +1,380 @@
+    return out
+
+
+def trim_address(value: str) -> str:
+    value = normalize_space(value)
+    value = re.sub(r"\s+(?:which|where|that|has|is|was|opened|serves|offers|features)\b.*$", "", value, flags=re.I)
+    value = re.sub(r"[),;:.\-–—]+$", "", value)
+    return value.strip(" ,;()[]")
+
+
+def extract_address_matches(text: str) -> list[dict[str, Any]]:
+    patterns = [
+        ("us_numeric", "complete", US_NUMERIC_RE),
+        ("us_ordinal_street", "complete", US_ORDINAL_STREET_RE),
+        ("us_spelled_house", "complete", US_SPELLED_HOUSE_RE),
+        ("international_numeric", "complete", INTL_NUMERIC_RE),
+        ("international_reversed", "complete", INTL_REVERSED_RE),
+        ("uk_numeric", "complete", UK_RE),
+        ("partial_location", "partial", PARTIAL_LOCATION_RE),
+    ]
+    out: list[dict[str, Any]] = []
+    occupied: list[tuple[int, int]] = []
+    for pattern_type, completeness, pattern in patterns:
+        for m in pattern.finditer(text):
+            span = m.span()
+            if any(max(span[0], a) < min(span[1], b) for a, b in occupied):
+                continue
+            raw = trim_address(m.group(0))
+            if len(raw) < 5:
+                continue
+            occupied.append(span)
+            out.append({
+                "pattern_type": pattern_type,
+                "address_completeness": completeness,
+                "raw_address": raw,
+                "start": span[0],
+                "end": span[1],
+            })
+    return sorted(out, key=lambda x: (x["start"], -(x["end"] - x["start"])))
+
+
+def number_and_street(value: str) -> tuple[str, set[str]]:
+    normalized = norm_address(value)
+    m = re.search(r"\b\d{1,5}(?:-\d{1,5})?\b", normalized)
+    number = m.group(0) if m else ""
+    ignored = {
+        "new", "york", "ny", "united", "states", "usa", "brooklyn", "bronx", "queens",
+        "manhattan", "staten", "island", "at", "near", "between", "and", "corner", "of",
+        "jersey", "city", "hoboken", "london", "uk", "england",
+    }
+    tokens = {t for t in normalized.split() if t not in ignored and not t.isdigit() and len(t) > 1}
+    return number, tokens
+
+
+def address_similarity(source: str, mapped: str) -> tuple[bool, float, str]:
+    sn, st = number_and_street(source)
+    mn, mt = number_and_street(mapped)
+    if sn and mn and sn != mn:
+        return False, 0.0, f"building number differs ({sn} vs {mn})"
+    meaningful = {"st", "ave", "rd", "blvd", "dr", "ln", "pl", "ct", "ter", "pkwy", "hwy"}
+    overlap = (st - meaningful) & (mt - meaningful)
+    union = (st - meaningful) | (mt - meaningful)
+    score = len(overlap) / max(1, len(union))
+    if sn and mn and sn == mn and overlap:
+        return True, max(0.85, score), "same building number and street token"
+    if not sn and not mn and len(overlap) >= 2:
+        return True, max(0.70, score), "street tokens agree"
+    if sn and not mn and len(overlap) >= 2:
+        return True, max(0.72, score), "mapped address omits building number but street tokens agree"
+    return False, score, "insufficient street-address agreement"
+
+
+def name_similarity(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+    na, nb = norm_identity(a), norm_identity(b)
+    if not na or not nb:
+        return 0.0
+    if na in nb or nb in na:
+        return 1.0
+    ta, tb = set(na.split()), set(nb.split())
+    jaccard = len(ta & tb) / max(1, len(ta | tb))
+    return max(jaccard, SequenceMatcher(None, na, nb).ratio())
+
+
+def specific_title(title: str) -> bool:
+    n = norm_identity(title)
+    return bool(n and n not in GENERIC_TITLES and len(n.split()) <= 14)
+
+
+def slug_name(url: str) -> str:
+    slug = urllib.parse.urlparse(url).path.rstrip("/").split("/")[-1]
+    slug = re.sub(r"^tables-for-two-", "", slug)
+    slug = re.sub(r"-\d+$", "", slug)
+    words = [w for w in slug.split("-") if w not in {"the", "at", "and", "of", "a", "an", "restaurant", "review"}]
+    return " ".join(w.capitalize() for w in words)
+
+
+def cleanup_name(value: str) -> str:
+    value = normalize_space(value)
+    value = re.sub(r"^(?:at|the newest of the|the new|the|a|an)\s+", "", value, flags=re.I)
+    value = re.sub(r"\s+(?:has|is|was)$", "", value, flags=re.I)
+    value = value.strip(" ,.;:!?—–-")
+    if value.isupper() and len(value.split()) <= 8:
+        value = value.title()
+    return value
+
+
+def extract_name_from_context(
+    text: str,
+    match: dict[str, Any],
+    title: str,
+    source_url: str,
+    aux_rows: list[dict[str, Any]],
+) -> tuple[str, str]:
+    address = match["raw_address"]
+    start, end = match["start"], match["end"]
+    prefix = text[max(0, start - 240):start]
+    suffix = text[end:min(len(text), end + 160)]
+    local = text[max(0, start - 240):min(len(text), end + 160)]
+
+    # Exact auxiliary URL and address evidence is the strongest fallback.
+    for aux in aux_rows:
+        aux_name = normalize_space(aux.get("name", ""))
+        aux_address = normalize_space(aux.get("address", ""))
+        if aux_name and aux_address:
+            ok, _, _ = address_similarity(address, aux_address)
+            if ok and norm_identity(aux_name) in norm_identity(text + " " + title):
+                return aux_name, f"{aux.get('provider')} exact source-URL record, source-corroborated"
+
+    escaped = re.escape(address)
+    name_pattern = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\- ]{1,85}?"
+    patterns = [
+        rf"{escaped}.{{0,120}}?(?:called|named|known as)\s+(?:the\s+)?(?P<name>{name_pattern})(?=[,.;:!?—–]|$)",
+        rf"(?:^|[.!?—–]\s+)(?P<name>{name_pattern})\s+(?:has moved|moved|has opened|opened|has reopened|reopened|is located|was located)\s+(?:at|to|on)\s+{escaped}",
+        rf"(?:^|[.!?—–]\s+)(?P<name>{name_pattern}),?\s+(?:is|was|has been)\s+(?:at|on)\s+{escaped}",
+        rf"(?:^|[.!?—–]\s+).*?(?:in|at)\s+(?:the\s+)?(?P<name>[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\- ]{{1,60}}?),?\s+at\s+{escaped}",
+        rf"(?:^|[.!?—–]\s+)(?P<name>{name_pattern}),\s*{escaped}",
+        rf"(?:^|[.!?—–]\s+)(?P<name>[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9&'’./+\- ]{{2,70}})\s+{escaped}",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, local)
+        if not m:
+            continue
+        name = cleanup_name(m.group("name"))
+        if 2 <= len(name) <= 90 and norm_identity(name) not in {"this", "there", "here", "place", "restaurant"}:
+            return name, "same source block"
+
+    # All-caps venue lead, common in the digitized archive.
+    lead = re.search(r"(?:^|[.!?]\s+)([A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9&'’./+\- ]{2,70})\s*$", prefix)
+    if lead:
+        name = cleanup_name(lead.group(1))
+        if name and norm_identity(name) not in {"the", "at", "with", "then", "and"}:
+            return name, "uppercase lead in same source block"
+
+    # Comma-delimited venue immediately before the address.
+    comma = re.search(r"([A-ZÀ-ÖØ-Þ][^.;:!?]{1,85}?),\s*$", prefix)
+    if comma:
+        name = cleanup_name(comma.group(1).split("—")[-1])
+        if 2 <= len(name) <= 90 and not ADDRESS_CUE_RE.search(name):
+            return name, "comma-delimited same-block lead"
+
+    # Specific article title is acceptable only if repeated in the source block/corpus.
+    if specific_title(title) and norm_identity(title) in norm_identity(text):
+        return cleanup_name(title), "specific article title repeated in source block"
+
+    slug = slug_name(source_url)
+    if slug and norm_identity(slug) in norm_identity(text):
+        return cleanup_name(slug), "source URL slug corroborated by source block"
+
+    # A single exact-URL auxiliary venue may resolve a generic article title, but its name
+    # must appear somewhere in the source block or title.
+    unique_aux_names = sorted({normalize_space(a.get("name", "")) for a in aux_rows if normalize_space(a.get("name", ""))})
+    if len(unique_aux_names) == 1:
+        aux_name = unique_aux_names[0]
+        if norm_identity(aux_name) in norm_identity(text + " " + title):
+            return aux_name, "single exact source-URL auxiliary name, source-corroborated"
+
+    # Last-resort nearby capitalized phrase; deliberately conservative.
+    phrase = re.search(r"([A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’./+\- ]{1,60})\s*$", prefix)
+    if phrase:
+        name = cleanup_name(phrase.group(1))
+        if 2 <= len(name) <= 70 and not ADDRESS_CUE_RE.search(name) and len(name.split()) <= 8:
+            return name, "nearest capitalized phrase in same source block"
+
+    return "", "venue name could not be associated with the address in the source block"
+
+
+def source_contains_name(article: dict[str, Any], name: str) -> bool:
+    corpus = " ".join([article.get("title", ""), article.get("description", "")] + [b.get("text", "") for b in article.get("blocks", [])])
+    return bool(norm_identity(name) and norm_identity(name) in norm_identity(corpus))
+
+
+def source_contains_address(article: dict[str, Any], address: str) -> bool:
+    corpus = " ".join([article.get("description", "")] + [b.get("text", "") for b in article.get("blocks", [])])
+    ok, _, _ = address_similarity(address, corpus)
+    if ok:
+        return True
+    number, tokens = number_and_street(address)
+    norm_corpus = norm_address(corpus)
+    return bool(number and number in norm_corpus.split() and (tokens & set(norm_corpus.split())))
+
+
+def build_occurrences(articles: list[dict[str, Any]], aux_index: dict[str, list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    occurrences: list[dict[str, Any]] = []
+    article_audit: list[dict[str, Any]] = []
+    for article in articles:
+        url = article.get("canonical_url") or article.get("source_url")
+        aux_rows = aux_index.get(canonicalize_newyorker_url(url), [])
+        occurrence_order = 0
+        detected = 0
+        unparsed_blocks = 0
+        for block in article.get("blocks", []):
+            text = block.get("text", "")
+            matches = extract_address_matches(text)
+            if not matches and ADDRESS_CUE_RE.search(text) and len(text) <= 500:
+                unparsed_blocks += 1
+                occurrence_order += 1
+                occurrences.append({
+                    "occurrence_id": stable_id(url, block.get("location"), block.get("order"), "unparsed"),
+                    "inventory_order": article.get("inventory_order"),
+                    "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""),
+                    "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""),
+                    "year": article.get("year", ""),
+                    "source_location": block.get("location", ""),
+                    "block_order": block.get("order", ""),
+                    "occurrence_order": occurrence_order,
+                    "pattern_type": "unparsed_address_like_block",
+                    "address_completeness": "unparsed",
+                    "candidate_name": "",
+                    "name_basis": "",
+                    "raw_address": "",
+                    "evidence_excerpt": truncate_words(text, 28),
+                    "auxiliary_provider": "",
+                    "auxiliary_name": "",
+                    "auxiliary_address": "",
+                    "auxiliary_latitude": "",
+                    "auxiliary_longitude": "",
+                    "google_verification_status": "not attempted",
+                    "google_query": "",
+                    "google_result_name": "",
+                    "google_result_address": "",
+                    "google_latitude": "",
+                    "google_longitude": "",
+                    "google_maps_url": "",
+                    "google_categories": "",
+                    "google_official_website": "",
+                    "official_website_check": "not attempted",
+                    "decision": "excluded",
+                    "exclusion_reason": "address-like source block could not be parsed into a complete postal address",
+                })
+                continue
+            for match in matches:
+                detected += 1
+                occurrence_order += 1
+                name, name_basis = extract_name_from_context(text, match, article.get("title", ""), url, aux_rows)
+                record = {
+                    "occurrence_id": stable_id(url, block.get("location"), block.get("order"), match.get("start"), match.get("raw_address")),
+                    "inventory_order": article.get("inventory_order"),
+                    "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""),
+                    "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""),
+                    "year": article.get("year", ""),
+                    "source_location": block.get("location", ""),
+                    "block_order": block.get("order", ""),
+                    "occurrence_order": occurrence_order,
+                    "pattern_type": match.get("pattern_type", ""),
+                    "address_completeness": match.get("address_completeness", ""),
+                    "candidate_name": name,
+                    "name_basis": name_basis,
+                    "raw_address": match.get("raw_address", ""),
+                    "evidence_excerpt": truncate_words(text[max(0, match["start"] - 100):min(len(text), match["end"] + 150)], 28),
+                    "auxiliary_provider": "",
+                    "auxiliary_name": "",
+                    "auxiliary_address": "",
+                    "auxiliary_latitude": "",
+                    "auxiliary_longitude": "",
+                    "google_verification_status": "not attempted",
+                    "google_query": "",
+                    "google_result_name": "",
+                    "google_result_address": "",
+                    "google_latitude": "",
+                    "google_longitude": "",
+                    "google_maps_url": "",
+                    "google_categories": "",
+                    "google_official_website": "",
+                    "official_website_check": "not attempted",
+                    "decision": "pending",
+                    "exclusion_reason": "",
+                }
+                for aux in aux_rows:
+                    if not aux.get("name"):
+                        continue
+                    addr_ok = False
+                    if aux.get("address"):
+                        addr_ok, _, _ = address_similarity(record["raw_address"], aux.get("address", ""))
+                    if addr_ok or (name and name_similarity(name, aux.get("name", "")) >= 0.82):
+                        record.update({
+                            "auxiliary_provider": aux.get("provider", ""),
+                            "auxiliary_name": aux.get("name", ""),
+                            "auxiliary_address": aux.get("address", ""),
+                            "auxiliary_latitude": aux.get("latitude", ""),
+                            "auxiliary_longitude": aux.get("longitude", ""),
+                            "google_maps_url": aux.get("google_maps_url", ""),
+                            "google_official_website": aux.get("official_website", ""),
+                        })
+                        break
+                if record["address_completeness"] != "complete":
+                    record["decision"] = "excluded"
+                    record["exclusion_reason"] = "source publishes only a partial location, not a complete street address"
+                elif not record["candidate_name"]:
+                    record["decision"] = "excluded"
+                    record["exclusion_reason"] = record["name_basis"]
+                occurrences.append(record)
+
+        # Auxiliary exact-URL rows with a source-published address that regex missed.
+        for aux in aux_rows:
+            aux_address = normalize_space(aux.get("address", ""))
+            aux_name = normalize_space(aux.get("name", ""))
+            if not aux_address or not aux_name:
+                continue
+            duplicate = any(
+                address_similarity(aux_address, r.get("raw_address", ""))[0]
+                and name_similarity(aux_name, r.get("candidate_name", "") or aux_name) >= 0.75
+                for r in occurrences if r.get("source_url") == url and r.get("raw_address")
+            )
+            if duplicate:
+                continue
+            if source_contains_address(article, aux_address) and source_contains_name(article, aux_name):
+                occurrence_order += 1
+                occurrences.append({
+                    "occurrence_id": stable_id(url, "auxiliary-recovery", aux_name, aux_address),
+                    "inventory_order": article.get("inventory_order"),
+                    "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""),
+                    "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""),
+                    "year": article.get("year", "") or str(aux.get("publication_date", ""))[:4],
+                    "source_location": "auxiliary recovery; exact source URL and source-corroborated",
+                    "block_order": 0,
+                    "occurrence_order": occurrence_order,
+                    "pattern_type": "auxiliary_source_recovery",
+                    "address_completeness": "complete",
+                    "candidate_name": aux_name,
+                    "name_basis": f"{aux.get('provider')} exact source-URL record; source-corroborated",
+                    "raw_address": aux_address,
+                    "evidence_excerpt": truncate_words(article.get("description", ""), 28),
+                    "auxiliary_provider": aux.get("provider", ""),
+                    "auxiliary_name": aux_name,
+                    "auxiliary_address": aux_address,
+                    "auxiliary_latitude": aux.get("latitude", ""),
+                    "auxiliary_longitude": aux.get("longitude", ""),
+                    "google_verification_status": "not attempted",
+                    "google_query": "",
+                    "google_result_name": "",
+                    "google_result_address": "",
+                    "google_latitude": "",
+                    "google_longitude": "",
+                    "google_maps_url": aux.get("google_maps_url", ""),
+                    "google_categories": "",
+                    "google_official_website": aux.get("official_website", ""),
+                    "official_website_check": "not attempted",
+                    "decision": "pending",
+                    "exclusion_reason": "",
+                })
+
+        article_audit.append({
+            "inventory_order": article.get("inventory_order"),
+            "source_url": article.get("source_url", ""),
+            "canonical_url": article.get("canonical_url", ""),
+            "status": article.get("status", 0),
+            "title": article.get("title", ""),
+            "published": article.get("published", ""),
+            "year": article.get("year", ""),
+            "content_blocks_inspected": len(article.get("blocks", [])),
+            "raw_address_occurrences": detected,
+            "unparsed_address_like_blocks": unparsed_blocks,
+            "alternate_language_links": json.dumps(article.get("alternate_languages", []), ensure_ascii=False),

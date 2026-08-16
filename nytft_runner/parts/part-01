@@ -1,0 +1,380 @@
+        if url not in links:
+            links.append(url)
+    return links, len(card_blocks)
+
+
+def discover_inventory() -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    page0_links: list[str] = []
+    terminal_page: int | None = None
+
+    for page in range(0, MAX_PAGES + 1):
+        url = f"{GUIDE_URL}?page={page}"
+        response = fetcher.get(url, "archive-pagination")
+        status = response.status_code if response is not None else 0
+        links: list[str] = []
+        blocks = 0
+        if response is not None and status == 200:
+            links, blocks = parse_editorial_links(response.text)
+        new_count = 0
+        if page == 0:
+            page0_links = links[:]
+        else:
+            for link in links:
+                if link not in seen:
+                    seen.add(link)
+                    ordered.append(link)
+                    new_count += 1
+        terminal = page > 0 and (status == 404 or (status == 200 and not links))
+        rows.append({
+            "page": page,
+            "requested_url": url,
+            "final_url": response.url if response is not None else "",
+            "status": status,
+            "article_links_detected": len(links),
+            "new_unique_editorial_urls": new_count,
+            "content_blocks_inspected": blocks,
+            "terminal": terminal,
+            "note": "",
+        })
+        if page == 1:
+            rows[0]["note"] = "exact duplicate of page 1" if page0_links == links else "not an exact duplicate of page 1"
+        if terminal:
+            terminal_page = page
+            break
+        if page > 1 and status not in {200}:
+            terminal_page = page
+            break
+    return ordered, rows, {
+        "editorial_urls_discovered": len(ordered),
+        "terminal_page": terminal_page,
+        "pagination_requests": len(rows),
+        "page_zero_duplicate_page_one": bool(rows and rows[0].get("note") == "exact duplicate of page 1"),
+    }
+
+
+def audit_robots_and_sitemaps(inventory: set[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    summary: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    robots_url = "https://www.newyorker.com/robots.txt"
+    rr = fetcher.get(robots_url, "robots")
+    robots_text = rr.text if rr is not None and rr.status_code == 200 else ""
+    (OUTDIR / f"{GUIDE_LABEL} - robots.txt").write_text(robots_text, encoding="utf-8")
+    sitemap_roots = re.findall(r"(?im)^Sitemap:\s*(\S+)", robots_text)
+    parser = urllib.robotparser.RobotFileParser()
+    if robots_text:
+        parser.parse(robots_text.splitlines())
+    summary["robots"] = {
+        "url": robots_url,
+        "status": rr.status_code if rr is not None else 0,
+        "allows_archive_pagination": parser.can_fetch("*", f"{GUIDE_URL}?page=1") if robots_text else None,
+        "allows_article": parser.can_fetch("*", "https://www.newyorker.com/magazine/2000/12/04/tables-for-two-65") if robots_text else None,
+        "sitemap_roots": sitemap_roots,
+    }
+
+    queue = list(dict.fromkeys(sitemap_roots))
+    discovered = set(queue)
+    all_content_urls: set[str] = set()
+    cursor = 0
+    cap = 400
+    while cursor < len(queue) and cursor < cap:
+        url = queue[cursor]
+        cursor += 1
+        response = fetcher.get(url, "sitemap", delay=0.20)
+        status = response.status_code if response is not None else 0
+        text = response.text if response is not None and status == 200 else ""
+        locs = [html_lib.unescape(normalize_space(x)) for x in re.findall(r"<loc>(.*?)</loc>", text, flags=re.I | re.S)]
+        children = [x for x in locs if x.lower().endswith(".xml") or "sitemap" in urllib.parse.urlparse(x).path.lower()]
+        contents = [canonicalize_newyorker_url(x) for x in locs if x.startswith("https://www.newyorker.com/") and x not in children]
+        contents = [x for x in contents if x]
+        all_content_urls.update(contents)
+        hits = set(contents) & inventory
+        rows.append({
+            "sitemap_url": url,
+            "status": status,
+            "loc_count": len(locs),
+            "child_sitemaps": len(children),
+            "editorial_inventory_hits": len(hits),
+            "error": "" if status == 200 else "non-200 or fetch failure",
+        })
+        for child in children:
+            if child not in discovered:
+                discovered.add(child)
+                queue.append(child)
+    summary["sitemaps"] = {
+        "discovered": len(discovered),
+        "fetched": len(rows),
+        "fetch_cap_reached": cursor >= cap and cursor < len(queue),
+        "unique_content_urls_seen": len(all_content_urls),
+        "inventory_urls_seen_in_sitemaps": len(all_content_urls & inventory),
+        "inventory_urls_absent_from_current_sitemaps": len(inventory - all_content_urls),
+    }
+    return summary, rows
+
+
+def iter_json_objects(value: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        for v in value.values():
+            yield from iter_json_objects(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from iter_json_objects(v)
+
+
+def decode_json_ld(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        cleaned = raw.strip().replace("\u2028", " ").replace("\u2029", " ")
+        try:
+            return json.loads(cleaned)
+        except Exception:
+            return None
+
+
+def extract_article(url: str, inventory_order: int) -> dict[str, Any]:
+    attempts = [url]
+    if "%25issue%25" in url:
+        attempts.append(url.replace("%25issue%25", "%2525issue%2525"))
+    response: requests.Response | None = None
+    used_url = url
+    for candidate in attempts:
+        used_url = candidate
+        response = fetcher.get(candidate, "editorial-article")
+        if response is not None and response.status_code == 200:
+            break
+    if response is None or response.status_code != 200:
+        return {
+            "inventory_order": inventory_order,
+            "source_url": url,
+            "fetch_url": used_url,
+            "canonical_url": response.url if response is not None else "",
+            "status": response.status_code if response is not None else 0,
+            "title": "",
+            "published": "",
+            "year": "",
+            "description": "",
+            "blocks": [],
+            "alternate_languages": [],
+            "error": "terminal fetch failure or non-200",
+        }
+
+    soup = BeautifulSoup(response.text, "lxml")
+
+    def meta_content(*keys: tuple[str, str]) -> str:
+        for attr, value in keys:
+            tag = soup.find("meta", attrs={attr: value})
+            if tag and tag.get("content"):
+                return normalize_space(tag.get("content"))
+        return ""
+
+    canonical_tag = soup.find("link", rel=lambda x: x and "canonical" in str(x).lower())
+    canonical = canonicalize_newyorker_url(canonical_tag.get("href", "") if canonical_tag else response.url)
+    title = meta_content(("property", "og:title"), ("name", "twitter:title"))
+    description = meta_content(("property", "og:description"), ("name", "description"), ("name", "twitter:description"))
+    published = meta_content(("property", "article:published_time"))
+    alternate_languages = []
+    for link in soup.find_all("link", rel=lambda x: x and "alternate" in str(x).lower()):
+        if link.get("hreflang") and link.get("href"):
+            alternate_languages.append({"hreflang": link.get("hreflang"), "url": link.get("href")})
+
+    blocks: list[dict[str, Any]] = []
+    if description:
+        blocks.append({"location": "metadata:description", "order": 0, "text": description})
+
+    json_headline = ""
+    json_bodies: list[str] = []
+    json_addresses: list[str] = []
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = script.string or script.get_text() or ""
+        data = decode_json_ld(raw)
+        if data is None:
+            continue
+        for obj in iter_json_objects(data):
+            if not json_headline and isinstance(obj.get("headline"), str):
+                json_headline = normalize_space(obj["headline"])
+            if not published and isinstance(obj.get("datePublished"), str):
+                published = normalize_space(obj["datePublished"])
+            body = obj.get("articleBody")
+            if isinstance(body, str) and body.strip():
+                json_bodies.extend(normalize_space(x) for x in re.split(r"\\n|\n", body) if normalize_space(x))
+            address = obj.get("address")
+            if isinstance(address, str):
+                json_addresses.append(normalize_space(address))
+            elif isinstance(address, dict):
+                parts = [address.get(k, "") for k in ("streetAddress", "addressLocality", "addressRegion", "postalCode", "addressCountry")]
+                value = ", ".join(normalize_space(x) for x in parts if normalize_space(x))
+                if value:
+                    json_addresses.append(value)
+
+    if not title:
+        title = json_headline or (normalize_space(soup.title.get_text(" ")) if soup.title else "")
+    elif norm_identity(title) in GENERIC_TITLES and json_headline:
+        title = json_headline
+
+    for i, value in enumerate(json_addresses, 1):
+        blocks.append({"location": "structured-data:address", "order": i, "text": value})
+
+    article = soup.find("article")
+    root = article or soup.find("main") or soup
+    html_blocks: list[tuple[str, str]] = []
+    for tag in root.find_all(["h1", "h2", "h3", "h4", "p", "figcaption", "address"]):
+        classes = " ".join(tag.get("class", []))
+        if tag.name == "p" and article is None and "body" not in classes.lower() and not tag.find_parent("article"):
+            continue
+        text = normalize_space(tag.get_text(" ", strip=True))
+        if not text or len(text) < 3:
+            continue
+        location = {
+            "p": "article-body", "h1": "heading", "h2": "heading", "h3": "heading",
+            "h4": "heading", "figcaption": "caption", "address": "address-field",
+        }[tag.name]
+        html_blocks.append((location, text))
+
+    combined: list[tuple[str, str]] = []
+    combined.extend(("json-ld:articleBody", x) for x in json_bodies)
+    combined.extend(html_blocks)
+    seen_texts: set[str] = {description} if description else set()
+    next_order = 1
+    for location, text in combined:
+        key = normalize_space(text)
+        if not key or key in seen_texts:
+            continue
+        seen_texts.add(key)
+        blocks.append({"location": location, "order": next_order, "text": key})
+        next_order += 1
+
+    year = ""
+    m = re.match(r"^(\d{4})", published or "")
+    if m:
+        year = m.group(1)
+    if not year:
+        m = re.search(r"/magazine/(\d{4})(?:/|-)" , canonical or url)
+        if m:
+            year = m.group(1)
+
+    return {
+        "inventory_order": inventory_order,
+        "source_url": url,
+        "fetch_url": used_url,
+        "canonical_url": canonical or url,
+        "status": response.status_code,
+        "title": title,
+        "published": published,
+        "year": year,
+        "description": description,
+        "blocks": blocks,
+        "alternate_languages": alternate_languages,
+        "error": "",
+    }
+
+
+def fetch_all_articles(urls: list[str]) -> list[dict[str, Any]]:
+    results: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=ARTICLE_WORKERS) as pool:
+        futures = {pool.submit(extract_article, url, i): i for i, url in enumerate(urls, 1)}
+        for done, future in enumerate(as_completed(futures), 1):
+            i = futures[future]
+            try:
+                results[i] = future.result()
+            except Exception as exc:
+                results[i] = {
+                    "inventory_order": i, "source_url": urls[i - 1], "fetch_url": "", "canonical_url": "",
+                    "status": 0, "title": "", "published": "", "year": "", "description": "",
+                    "blocks": [], "alternate_languages": [], "error": f"{type(exc).__name__}: {exc}",
+                }
+            if done % 50 == 0 or done == len(urls):
+                print(f"Fetched articles: {done}/{len(urls)}", flush=True)
+    return [results[i] for i in sorted(results)]
+
+
+def fetch_newforker() -> list[dict[str, Any]]:
+    response = fetcher.get("https://newforkermap.appspot.com/", "auxiliary-newforker", delay=0.50)
+    if response is None or response.status_code != 200:
+        return []
+    m = re.search(r"var\s+restos\s*=\s*(\[.*?\])\s*</script>", response.text, flags=re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except Exception:
+        return []
+    rows = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        ll = str(row.get("lat_lng") or "").split(",")
+        lat = ll[0].strip() if len(ll) == 2 else ""
+        lng = ll[1].strip() if len(ll) == 2 else ""
+        rows.append({
+            "provider": "The New Forker",
+            "source_url": canonicalize_newyorker_url(row.get("url", "")),
+            "name": normalize_space(row.get("name", "")),
+            "address": normalize_space(row.get("address", "")),
+            "latitude": lat,
+            "longitude": lng,
+            "publication_date": normalize_space(row.get("date_published", "")),
+            "description": normalize_space(row.get("first_graf", "")),
+            "closed_flag": normalize_space(row.get("is_closed", "")),
+            "google_maps_url": "",
+            "official_website": "",
+            "place_id": "",
+            "google_status": "",
+        })
+    return rows
+
+
+def sanitize_json_unicode(raw: str) -> str:
+    # Replace isolated surrogate escape sequences while preserving valid pairs.
+    return re.sub(r"\\u[dD][89a-fA-F][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})", "", raw)
+
+
+def fetch_tablesfortwo_map() -> list[dict[str, Any]]:
+    response = fetcher.get("https://www.tablesfortwo.nyc/", "auxiliary-tablesfortwo-map", delay=0.50)
+    if response is None or response.status_code != 200:
+        return []
+    soup = BeautifulSoup(response.text, "lxml")
+    script = soup.find("script", id="__NEXT_DATA__")
+    if not script:
+        return []
+    raw = script.get_text()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        try:
+            data = json.loads(sanitize_json_unicode(raw))
+        except Exception:
+            return []
+    restaurants = (((data.get("props") or {}).get("pageProps") or {}).get("indexData") or {}).get("restaurants") or []
+    rows = []
+    for row in restaurants:
+        article = row.get("article") or {}
+        gd = row.get("googleData") or {}
+        loc = gd.get("location") or {}
+        rows.append({
+            "provider": "tablesfortwo.nyc",
+            "source_url": canonicalize_newyorker_url(article.get("url", "")),
+            "name": normalize_space(row.get("name", "")),
+            "address": "",
+            "latitude": loc.get("lat", ""),
+            "longitude": loc.get("lng", ""),
+            "publication_date": normalize_space(article.get("publicationDate") or article.get("issueDate") or ""),
+            "description": normalize_space(article.get("description", "")),
+            "closed_flag": "",
+            "google_maps_url": normalize_space(gd.get("url", "")),
+            "official_website": normalize_space(gd.get("website", "")),
+            "place_id": normalize_space(gd.get("id", "")),
+            "google_status": normalize_space(gd.get("status", "")),
+        })
+    return rows
+
+
+def build_aux_index(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        url = canonicalize_newyorker_url(row.get("source_url", ""))
+        if url:
+            out[url].append(row)

@@ -1,0 +1,100 @@
+        if 2 <= len(name) <= 100 and norm_identity(name) not in {"this", "there", "here", "place", "restaurant", "at"}:
+            return name, basis, confidence
+
+    # Parenthetical addresses: choose the final proper-noun sequence before the opening parenthesis.
+    before_parenthesis = prefix.rsplit("(", 1)[0] if "(" in prefix else prefix
+    candidates = _titlecase_name_candidates(before_parenthesis[-160:])
+    if candidates:
+        name = cleanup_name(candidates[-1])
+        name = re.sub(r"^(?:At|In|On|From|Half a mile north at|Around the corner from)\s+", "", name, flags=re.I)
+        if 2 <= len(name) <= 90 and norm_identity(name) not in {"this", "there", "here", "place", "restaurant", "new york"}:
+            return name, "nearest proper-noun phrase before parenthetical address", 0.91
+
+    # Generic address-only metadata can be associated through a specific slug/title only
+    # when that name is independently present in the direct article corpus.
+    if specific_title(title) and norm_identity(title) in norm_identity(corpus):
+        return cleanup_name(title), "specific source headline corroborated by article corpus", 0.93
+    slug = slug_name(source_url)
+    if slug and len(norm_identity(slug).split()) <= 8 and norm_identity(slug) in norm_identity(corpus):
+        return cleanup_name(slug), "source URL slug corroborated by article corpus", 0.92
+
+    # Last strong proper-noun phrase immediately before the address.
+    candidates = _titlecase_name_candidates(prefix[-180:])
+    if candidates:
+        name = cleanup_name(candidates[-1])
+        name = re.sub(r"^(?:At|In|On|The|A|An)\s+", "", name, flags=re.I)
+        if 2 <= len(name) <= 90 and not ADDRESS_CUE_RE.search(name) and norm_identity(name) not in {"this", "there", "here", "place", "restaurant"}:
+            return name, "nearest proper-noun phrase in same source block", 0.82
+
+    return "", "venue name could not be associated with the address in the source block", 0.0
+
+
+def _locality_hint(text: str, address: str) -> str:
+    joined = f"{address} {text}"
+    m = _V2_WORLD_CITIES.search(joined)
+    if m:
+        city = m.group(1)
+        if city.lower() in {"brooklyn", "queens", "bronx", "manhattan", "staten island"}:
+            return f"{city}, New York, United States"
+        if city.lower() == "new york":
+            return "New York, NY, United States"
+        return city
+    if re.search(r"\b(?:NY|New York|Brooklyn|Queens|Bronx|Manhattan|Staten Island)\b", address, re.I):
+        return "New York, NY, United States"
+    # Tables for Two is historically New York-centric; use this only as a query hint,
+    # never as published evidence unless Maps returns the same street/building.
+    if re.search(rf"\b(?:{_V2_FULL_SUFFIX}|{_V2_ABBR_SUFFIX}\.?|Broadway|Bowery)\b", address, re.I):
+        return "New York, NY, United States"
+    return ""
+
+
+def build_occurrences(articles: list[dict[str, Any]], aux_index: dict[str, list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    occurrences: list[dict[str, Any]] = []
+    article_audit: list[dict[str, Any]] = []
+    for article in articles:
+        url = article.get("canonical_url") or article.get("source_url")
+        aux_rows = aux_index.get(canonicalize_newyorker_url(url), [])
+        blocks = article.get("blocks", [])
+        article_corpus = " ".join([article.get("title", ""), article.get("description", "")] + [b.get("text", "") for b in blocks])
+        occurrence_order = 0
+        detected = 0
+        unparsed_blocks = 0
+        for bi, block in enumerate(blocks):
+            text = block.get("text", "")
+            prev = blocks[bi - 1].get("text", "") if bi > 0 else ""
+            nxt = blocks[bi + 1].get("text", "") if bi + 1 < len(blocks) else ""
+            matches = extract_address_matches(text)
+            if not matches and ADDRESS_CUE_RE.search(text) and len(text) <= 500:
+                unparsed_blocks += 1
+                occurrence_order += 1
+                occurrences.append({
+                    "occurrence_id": stable_id(url, block.get("location"), block.get("order"), "unparsed"),
+                    "inventory_order": article.get("inventory_order"), "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""), "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""), "year": article.get("year", ""),
+                    "source_location": block.get("location", ""), "block_order": block.get("order", ""),
+                    "occurrence_order": occurrence_order, "pattern_type": "unparsed_address_like_block",
+                    "address_completeness": "unparsed", "candidate_name": "", "name_basis": "",
+                    "name_confidence": 0.0, "raw_address": "", "canonical_source_address": "",
+                    "locality_hint": _locality_hint(text, ""), "evidence_excerpt": truncate_words(text, 40),
+                    "auxiliary_provider": "", "auxiliary_name": "", "auxiliary_address": "",
+                    "auxiliary_latitude": "", "auxiliary_longitude": "", "auxiliary_place_id": "",
+                    "auxiliary_google_maps_url": "", "google_verification_status": "not attempted",
+                    "verification_method": "", "google_query": "", "google_match_basis": "",
+                    "google_result_name": "", "google_result_address": "", "google_latitude": "",
+                    "google_longitude": "", "google_maps_url": "", "google_categories": "",
+                    "google_official_website": "", "official_website_check": "not attempted",
+                    "decision": "excluded", "merged_public_key": "",
+                    "exclusion_reason": "address-like source block could not be parsed into a complete postal address",
+                })
+                continue
+            for match in matches:
+                detected += 1
+                occurrence_order += 1
+                name, basis, confidence = extract_name_from_context(
+                    text, match, article.get("title", ""), url, aux_rows,
+                    article_corpus=article_corpus, previous_block=prev, next_block=nxt,
+                )
+                raw = match.get("raw_address", "")
+                record = {
+                    "occurrence_id": stable_id(url, block.get("location"), block.get("order"), match.get("start"), raw),

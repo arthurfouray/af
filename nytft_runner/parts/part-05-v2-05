@@ -1,0 +1,100 @@
+                    "inventory_order": article.get("inventory_order"), "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""), "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""), "year": article.get("year", ""),
+                    "source_location": block.get("location", ""), "block_order": block.get("order", ""),
+                    "occurrence_order": occurrence_order, "pattern_type": match.get("pattern_type", ""),
+                    "address_completeness": match.get("address_completeness", ""), "candidate_name": name,
+                    "name_basis": basis, "name_confidence": confidence, "raw_address": raw,
+                    "canonical_source_address": canonical_address_text(raw),
+                    "locality_hint": _locality_hint(text, raw),
+                    "evidence_excerpt": truncate_words(text[max(0, match["start"] - 180):min(len(text), match["end"] + 240)], 48),
+                    "auxiliary_provider": "", "auxiliary_name": "", "auxiliary_address": "",
+                    "auxiliary_latitude": "", "auxiliary_longitude": "", "auxiliary_place_id": "",
+                    "auxiliary_google_maps_url": "", "google_verification_status": "not attempted",
+                    "verification_method": "", "google_query": "", "google_match_basis": "",
+                    "google_result_name": "", "google_result_address": "", "google_latitude": "",
+                    "google_longitude": "", "google_maps_url": "", "google_categories": "",
+                    "google_official_website": "", "official_website_check": "not attempted",
+                    "decision": "pending", "merged_public_key": "", "exclusion_reason": "",
+                }
+                for aux in aux_rows:
+                    aux_name = normalize_space(aux.get("name", ""))
+                    aux_address = normalize_space(aux.get("address", ""))
+                    addr_ok = bool(aux_address and address_similarity(raw, aux_address)[0])
+                    name_ok = bool(name and aux_name and name_similarity(name, aux_name) >= 0.80)
+                    if addr_ok or name_ok:
+                        record.update({
+                            "auxiliary_provider": aux.get("provider", ""), "auxiliary_name": aux_name,
+                            "auxiliary_address": aux_address, "auxiliary_latitude": aux.get("latitude", ""),
+                            "auxiliary_longitude": aux.get("longitude", ""), "auxiliary_place_id": aux.get("place_id", ""),
+                            "auxiliary_google_maps_url": aux.get("google_maps_url", ""),
+                            "google_maps_url": aux.get("google_maps_url", ""),
+                            "google_official_website": aux.get("official_website", ""),
+                        })
+                        break
+                if record["address_completeness"] == "invalid":
+                    record["decision"] = "excluded"
+                    record["exclusion_reason"] = match.get("syntax_reason") or "candidate failed strict postal-address syntax"
+                elif record["address_completeness"] != "complete":
+                    record["decision"] = "excluded"
+                    record["exclusion_reason"] = "source publishes only a partial location, not a complete street address"
+                elif not record["candidate_name"]:
+                    record["decision"] = "excluded"
+                    record["exclusion_reason"] = record["name_basis"]
+                occurrences.append(record)
+
+        # Recover exact-URL auxiliary addresses only when both venue and address are found on the direct source page.
+        for aux in aux_rows:
+            aux_address = normalize_space(aux.get("address", ""))
+            aux_name = normalize_space(aux.get("name", ""))
+            if not aux_address or not aux_name:
+                continue
+            duplicate = any(
+                r.get("source_url") == url and r.get("raw_address") and address_similarity(aux_address, r.get("raw_address", ""))[0]
+                and name_similarity(aux_name, r.get("candidate_name", "") or aux_name) >= 0.75
+                for r in occurrences
+            )
+            if duplicate:
+                continue
+            if source_contains_address(article, aux_address) and source_contains_name(article, aux_name):
+                occurrence_order += 1
+                occurrences.append({
+                    "occurrence_id": stable_id(url, "auxiliary-recovery", aux_name, aux_address),
+                    "inventory_order": article.get("inventory_order"), "source_url": url,
+                    "original_inventory_url": article.get("source_url", ""), "source_status": article.get("status", 0),
+                    "guide": article.get("title", ""), "year": article.get("year", "") or str(aux.get("publication_date", ""))[:4],
+                    "source_location": "auxiliary recovery; exact source URL and direct-source corroborated",
+                    "block_order": 0, "occurrence_order": occurrence_order,
+                    "pattern_type": "auxiliary_source_recovery", "address_completeness": "complete",
+                    "candidate_name": aux_name, "name_basis": f"{aux.get('provider')} exact source-URL record; direct-source corroborated",
+                    "name_confidence": 0.99, "raw_address": aux_address,
+                    "canonical_source_address": canonical_address_text(aux_address),
+                    "locality_hint": _locality_hint(article_corpus, aux_address),
+                    "evidence_excerpt": truncate_words(article.get("description", "") or article_corpus, 48),
+                    "auxiliary_provider": aux.get("provider", ""), "auxiliary_name": aux_name,
+                    "auxiliary_address": aux_address, "auxiliary_latitude": aux.get("latitude", ""),
+                    "auxiliary_longitude": aux.get("longitude", ""), "auxiliary_place_id": aux.get("place_id", ""),
+                    "auxiliary_google_maps_url": aux.get("google_maps_url", ""),
+                    "google_verification_status": "not attempted", "verification_method": "",
+                    "google_query": "", "google_match_basis": "", "google_result_name": "",
+                    "google_result_address": "", "google_latitude": "", "google_longitude": "",
+                    "google_maps_url": aux.get("google_maps_url", ""), "google_categories": "",
+                    "google_official_website": aux.get("official_website", ""),
+                    "official_website_check": "not attempted", "decision": "pending",
+                    "merged_public_key": "", "exclusion_reason": "",
+                })
+
+        article_audit.append({
+            "inventory_order": article.get("inventory_order"), "source_url": article.get("source_url", ""),
+            "canonical_url": article.get("canonical_url", ""), "status": article.get("status", 0),
+            "title": article.get("title", ""), "published": article.get("published", ""),
+            "year": article.get("year", ""), "content_blocks_inspected": len(blocks),
+            "raw_address_occurrences": detected, "unparsed_address_like_blocks": unparsed_blocks,
+            "alternate_language_links": json.dumps(article.get("alternate_languages", []), ensure_ascii=False),
+            "error": article.get("error", ""),
+        })
+    return occurrences, article_audit
+
+
+def _looks_like_map_address(s: str) -> bool:
+    s = normalize_space(s)

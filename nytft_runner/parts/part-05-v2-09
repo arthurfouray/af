@@ -1,0 +1,33 @@
+        soup = BeautifulSoup(issue.text, "lxml")
+        candidates = []
+        for a in soup.find_all("a", href=True):
+            href = html_lib.unescape(a.get("href", ""))
+            if "dellanima" in href.lower():
+                candidates.append(urllib.parse.urljoin("https://www.newyorker.com", href))
+        candidates.extend([
+            "https://www.newyorker.com/magazine/%25issue%25/dellanima",
+            "https://www.newyorker.com/magazine/2008/02/11/dellanima",
+        ])
+        for candidate in dict.fromkeys(candidates):
+            repaired = _extract_article_v1(candidate, inventory_order)
+            if int(repaired.get("status") or 0) == 200:
+                repaired["source_url"] = url
+                repaired["original_inventory_url"] = url
+                return repaired
+    return result
+
+
+_build_public_rows_v1 = build_public_rows
+
+def build_public_rows(occurrences: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    public_rows, evidence_rows, exclusions = _build_public_rows_v1(occurrences)
+    # Strengthen descriptions and retain verification method in the evidence ledger.
+    by_key = {r.get("_normalized_key", ""): r for r in public_rows}
+    for evidence in evidence_rows:
+        match = next((o for o in occurrences if o.get("occurrence_id") == evidence.get("occurrence_id")), None)
+        if match:
+            evidence["verification_method"] = match.get("verification_method", "")
+            evidence["source_address_as_published"] = match.get("raw_address", "")
+            evidence["name_basis"] = match.get("name_basis", "")
+            evidence["name_confidence"] = match.get("name_confidence", "")
+    return public_rows, evidence_rows, exclusions

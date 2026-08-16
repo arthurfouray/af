@@ -1,0 +1,190 @@
+        aux = {
+            "latitude": record.get("auxiliary_latitude", ""),
+            "longitude": record.get("auxiliary_longitude", ""),
+        }
+        place, basis, _ = choose_google_place(name, source_address, lookup.get("places", []), aux)
+        if place is None:
+            record["decision"] = "excluded"
+            record["google_verification_status"] = "conflict"
+            record["exclusion_reason"] = basis
+            if lookup.get("places"):
+                p = lookup["places"][0]
+                record.update({
+                    "google_result_name": p.get("name", ""),
+                    "google_result_address": p.get("address", ""),
+                    "google_latitude": p.get("latitude", ""),
+                    "google_longitude": p.get("longitude", ""),
+                    "google_maps_url": p.get("maps_url", ""),
+                    "google_categories": " | ".join(p.get("categories", [])),
+                    "google_official_website": p.get("website", "") or record.get("google_official_website", ""),
+                })
+            continue
+        maps_url = place.get("maps_url", "") or (
+            "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{name}, {country_complete_address(place.get('address', ''))}")
+        )
+        record.update({
+            "google_verification_status": "verified",
+            "google_match_basis": basis,
+            "google_result_name": place.get("name", ""),
+            "google_result_address": country_complete_address(place.get("address", "")),
+            "google_latitude": place.get("latitude", ""),
+            "google_longitude": place.get("longitude", ""),
+            "google_maps_url": maps_url,
+            "google_categories": " | ".join(place.get("categories", [])),
+            "google_official_website": place.get("website", "") or record.get("google_official_website", ""),
+            "decision": "verified",
+        })
+        if i % 50 == 0 or i == len(pending):
+            print(f"Google Maps verification: {i}/{len(pending)}", flush=True)
+
+
+def official_site_check(url: str, address: str) -> str:
+    if not url:
+        return "not available"
+    try:
+        p = urllib.parse.urlparse(url)
+        if p.scheme not in {"http", "https"}:
+            return "invalid official URL"
+        response = fetcher.get(url, "official-website-verification", delay=OFFICIAL_DELAY, timeout=15)
+        if response is None or response.status_code >= 400:
+            return f"official site fetch failed ({response.status_code if response is not None else 0})"
+        text = normalize_space(BeautifulSoup(response.text, "lxml").get_text(" ", strip=True))
+        sn, st = number_and_street(address)
+        nt = norm_address(text)
+        token_match = bool((st - {"st", "ave", "rd", "blvd", "dr", "ln", "pl", "ct", "ter"}) & set(nt.split()))
+        number_match = bool(not sn or sn in nt.split())
+        if token_match and number_match:
+            return "official site fetched; address corroborated"
+        return "official site fetched; address not found on fetched page"
+    except Exception as exc:
+        return f"official site check error: {type(exc).__name__}"
+
+
+def verify_official_sites(occurrences: list[dict[str, Any]]) -> None:
+    tasks: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in occurrences:
+        if record.get("decision") != "verified":
+            continue
+        url = record.get("google_official_website", "")
+        address = record.get("google_result_address", "")
+        if url:
+            tasks[(url, address)].append(record)
+        else:
+            record["official_website_check"] = "not available"
+    with ThreadPoolExecutor(max_workers=OFFICIAL_WORKERS) as pool:
+        futures = {pool.submit(official_site_check, url, address): (url, address) for url, address in tasks}
+        for i, future in enumerate(as_completed(futures), 1):
+            key = futures[future]
+            try:
+                status = future.result()
+            except Exception as exc:
+                status = f"official site check error: {type(exc).__name__}"
+            for record in tasks[key]:
+                record["official_website_check"] = status
+            if i % 50 == 0 or i == len(futures):
+                print(f"Official website checks: {i}/{len(futures)}", flush=True)
+
+
+def classify_venue(name: str, context: str, categories: list[str]) -> tuple[int, str]:
+    text = " ".join([name, context, " ".join(categories)]).lower()
+    restaurant_words = ("restaurant", "cafe", "café", "diner", "bistro", "brasserie", "grill", "steakhouse", "bakery", "ice cream", "food", "dining", "lunch", "dinner", "eatery")
+    if any(x in text for x in ("wine bar", "wine cellar")):
+        return 1, "Wine bar"
+    if any(x in text for x in ("cocktail bar", "bar", "pub", "tavern", "saloon")) and not any(x in text for x in ("night club", "nightclub", "dance club", "cabaret")):
+        return 1, "Bar"
+    if any(x in text for x in ("cafe", "café", "coffee shop", "tea room")):
+        return 1, "Café"
+    if any(x in text for x in ("night club", "nightclub", "dance club", "cabaret", "discotheque", "dance hall", "music venue", "spa", "gym", "bowling", "amusement", "tour", "festival")):
+        return 4, "Nightlife / activity"
+    if any(x in text for x in ("museum", "art gallery", "gallery", "theatre", "theater", "archive", "cultural center", "arts centre", "arts center", "cinema")):
+        return 3, "Cultural institution"
+    if any(x in text for x in ("hotel", "lodging", "inn", "hostel", "resort", "guest house")) and not any(x in text for x in restaurant_words):
+        return 6, "Hotel"
+    if any(x in text for x in ("landmark", "monument", "historic site", "viewpoint", "scenic attraction", "tourist attraction", "park")) and not any(x in text for x in restaurant_words):
+        return 5, "Landmark"
+    if any(x in text for x in ("bookstore", "book shop", "grocery", "grocer", "market", "retail store", "shop", "butcher", "fishmonger", "department store", "food store")) and not any(x in text for x in restaurant_words):
+        return 2, "Shop"
+    if any(x in text for x in ("bakery", "ice cream", "dessert shop", "chocolatier")):
+        return 1, "Food and drink venue"
+    return 1, "Restaurant"
+
+
+def build_description(name: str, category: str, guide: str, categories: list[str]) -> str:
+    specific = next((c for c in categories if c and c.lower() not in {category.lower(), "point of interest", "establishment"}), "")
+    type_text = specific.lower() if specific else category.lower()
+    if guide and norm_identity(guide) not in GENERIC_TITLES:
+        return f"The source profiles {name} as a {type_text} in the Tables for Two article “{guide}.”"
+    return f"The source reviews or profiles {name} as a {type_text} in the Tables for Two archive."
+
+
+def build_public_rows(occurrences: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    verified_occ = [r for r in occurrences if r.get("decision") == "verified"]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for r in verified_occ:
+        name = r.get("google_result_name") or r.get("candidate_name")
+        address = r.get("google_result_address")
+        key = (norm_identity(name), norm_address(address))
+        if not all(key):
+            r["decision"] = "excluded"
+            r["exclusion_reason"] = "verified result produced an empty normalized venue identity or address"
+            continue
+        groups[key].append(r)
+
+    public_rows: list[dict[str, Any]] = []
+    evidence_rows: list[dict[str, Any]] = []
+    for key, group in groups.items():
+        group.sort(key=lambda r: (int(r.get("inventory_order") or 10**9), int(r.get("occurrence_order") or 10**9), r.get("source_url", "")))
+        chosen = group[0]
+        for extra in group[1:]:
+            extra["decision"] = "merged-duplicate"
+            extra["exclusion_reason"] = "same normalized venue identity and physical address; retained in occurrence ledger"
+            extra["merged_public_key"] = " | ".join(key)
+        name = chosen.get("google_result_name") or chosen.get("candidate_name")
+        address = chosen.get("google_result_address")
+        categories = [x for x in chosen.get("google_categories", "").split(" | ") if x]
+        bucket, category = classify_venue(name, chosen.get("evidence_excerpt", ""), categories)
+        description = build_description(name, category, chosen.get("guide", ""), categories)
+        row = {
+            "Name": name,
+            "Address": address,
+            "Latitude and longitude": f"{float(chosen['google_latitude']):.7f}, {float(chosen['google_longitude']):.7f}",
+            "Guide": chosen.get("guide", "") or "Tables for Two",
+            "Category": category,
+            "Description": description,
+            "Source URL": chosen.get("source_url", ""),
+            "Priority": str(chosen.get("occurrence_order") or 1),
+            "Year": str(chosen.get("year", "")),
+            "Google Maps URL": chosen.get("google_maps_url", ""),
+            "_bucket": bucket,
+            "_normalized_key": " | ".join(key),
+            "_occurrence_count": len(group),
+        }
+        public_rows.append(row)
+        for r in group:
+            evidence_rows.append({
+                "normalized_public_key": " | ".join(key),
+                "published_name": name,
+                "published_address": address,
+                "source_url": r.get("source_url", ""),
+                "guide": r.get("guide", ""),
+                "year": r.get("year", ""),
+                "occurrence_id": r.get("occurrence_id", ""),
+                "occurrence_order": r.get("occurrence_order", ""),
+                "evidence_excerpt": r.get("evidence_excerpt", ""),
+                "google_match_basis": r.get("google_match_basis", ""),
+                "official_website_check": r.get("official_website_check", ""),
+            })
+    public_rows.sort(key=lambda r: (int(r["_bucket"]), r["Name"].casefold(), r["Address"].casefold()))
+
+    exclusions_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for r in occurrences:
+        if r.get("decision") != "excluded":
+            continue
+        key = (
+            norm_identity(r.get("candidate_name") or r.get("google_result_name") or r.get("occurrence_id")),
+            norm_address(r.get("raw_address") or r.get("google_result_address") or r.get("occurrence_id")),
+            r.get("exclusion_reason", ""),
+        )
+        if key not in exclusions_by_key:
+            exclusions_by_key[key] = {
+                "Candidate Name": r.get("candidate_name") or r.get("google_result_name") or "Unresolved address occurrence",

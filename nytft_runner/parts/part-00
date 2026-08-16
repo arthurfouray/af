@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""Fresh, fail-closed audit of The New Yorker's Tables for Two archive.
+
+The crawler exhausts the live paginated editorial inventory, inspects source metadata,
+JSON-LD, article text, headings, captions, and embedded page data, extracts every
+address-like occurrence, and verifies publishable venue/address rows against Google
+Maps. All requests, candidates, exclusions, and validation results are retained.
+"""
+from __future__ import annotations
+
+import csv
+import dataclasses
+import datetime as dt
+import hashlib
+import html as html_lib
+import json
+import math
+import os
+import random
+import re
+import sys
+import threading
+import time
+import traceback
+import unicodedata
+import urllib.parse
+import urllib.robotparser
+import zipfile
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Sequence
+
+import requests
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+GUIDE_URL = "https://www.newyorker.com/magazine/tables-for-two"
+GUIDE_LABEL = "https___www.newyorker.com_magazine_tables-for-two"
+OUTDIR = Path(os.environ.get("OUTPUT_DIR", "output")).resolve()
+OUTDIR.mkdir(parents=True, exist_ok=True)
+STARTED = dt.datetime.now(dt.timezone.utc)
+
+NY_DELAY = float(os.environ.get("NY_DELAY", "0.30"))
+MAP_DELAY = float(os.environ.get("MAP_DELAY", "0.45"))
+OFFICIAL_DELAY = float(os.environ.get("OFFICIAL_DELAY", "0.20"))
+REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "30"))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "4"))
+ARTICLE_WORKERS = int(os.environ.get("ARTICLE_WORKERS", "4"))
+OFFICIAL_WORKERS = int(os.environ.get("OFFICIAL_WORKERS", "8"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "300"))
+USER_AGENT = (
+    "Mozilla/5.0 (compatible; TablesForTwoAddressAudit/2026.08; "
+    "+https://github.com/arthurfouray/af)"
+)
+
+PUBLIC_HEADER = [
+    "Name",
+    "Address",
+    "Latitude and longitude",
+    "Guide",
+    "Category",
+    "Description",
+    "Source URL",
+    "Priority",
+    "Year",
+    "Google Maps URL",
+]
+
+BUCKET_FILES = {
+    1: f"{GUIDE_LABEL} - 1. Restaurants, bars, caves.csv",
+    2: f"{GUIDE_LABEL} - 2. Shopping and food shops.csv",
+    3: f"{GUIDE_LABEL} - 3. Museum and Culture.csv",
+    4: f"{GUIDE_LABEL} - 4. Party, leisure, activities and other.csv",
+    5: f"{GUIDE_LABEL} - 5. Sightseeing.csv",
+    6: f"{GUIDE_LABEL} - 6. Hotels.csv",
+}
+
+PLACEHOLDERS = {"n/a", "na", "unknown", "tbd", "-", "none", "null", "not available"}
+
+ARTICLE_PATH_RE = re.compile(
+    r"^/(?:magazine/(?:\d{4}(?:/\d{2}/\d{2}|-\d{2}-\d{2})|%issue%|%25issue%25)/[^/?#]+|"
+    r"culture/the-food-scene/[^/?#]+)$",
+    re.I,
+)
+
+PHONE_RE = re.compile(r"(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}|\(\d{3}\)[ .-]?\d{3}[ .-]\d{4}")
+ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+
+HOUSE_WORD = (
+    r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred"
+)
+ORDINAL_WORD = (
+    r"first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+    r"eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|"
+    r"seventeenth|eighteenth|nineteenth|twentieth|thirtieth|fortieth|"
+    r"fiftieth|sixtieth|seventieth|eightieth|ninetieth|hundredth|"
+    r"twenty[- ]first|twenty[- ]second|twenty[- ]third|twenty[- ]fourth|"
+    r"twenty[- ]fifth|twenty[- ]sixth|twenty[- ]seventh|twenty[- ]eighth|"
+    r"twenty[- ]ninth|thirty[- ]first|thirty[- ]second|thirty[- ]third|"
+    r"thirty[- ]fourth|thirty[- ]fifth|thirty[- ]sixth|thirty[- ]seventh|"
+    r"thirty[- ]eighth|thirty[- ]ninth|forty[- ]first|forty[- ]second|"
+    r"forty[- ]third|forty[- ]fourth|forty[- ]fifth|forty[- ]sixth|"
+    r"forty[- ]seventh|forty[- ]eighth|forty[- ]ninth|fifty[- ]first|"
+    r"fifty[- ]second|fifty[- ]third|fifty[- ]fourth|fifty[- ]fifth|"
+    r"fifty[- ]sixth|fifty[- ]seventh|fifty[- ]eighth|fifty[- ]ninth|"
+    r"sixty[- ]first|sixty[- ]second|sixty[- ]third|sixty[- ]fourth|"
+    r"sixty[- ]fifth|sixty[- ]sixth|sixty[- ]seventh|sixty[- ]eighth|"
+    r"sixty[- ]ninth|seventy[- ]first|seventy[- ]second|seventy[- ]third|"
+    r"seventy[- ]fourth|seventy[- ]fifth|seventy[- ]sixth|seventy[- ]seventh|"
+    r"seventy[- ]eighth|seventy[- ]ninth|eighty[- ]first|eighty[- ]second|"
+    r"eighty[- ]third|eighty[- ]fourth|eighty[- ]fifth|eighty[- ]sixth|"
+    r"eighty[- ]seventh|eighty[- ]eighth|eighty[- ]ninth|ninety[- ]first|"
+    r"ninety[- ]second|ninety[- ]third|ninety[- ]fourth|ninety[- ]fifth|"
+    r"ninety[- ]sixth|ninety[- ]seventh|ninety[- ]eighth|ninety[- ]ninth"
+)
+DIRECTION = r"(?:(?:N|S|E|W)\.?\s+|(?:North|South|East|West)\s+)?"
+STREET_TOKEN = r"[A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9'’&.\-/]*"
+STREET_NAME = rf"(?:{STREET_TOKEN}\s+){{0,8}}"
+STREET_SUFFIX = (
+    r"Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|"
+    r"Drive|Dr\.?|Place|Pl\.?|Court|Ct\.?|Highway|Hwy\.?|Parkway|Pkwy\.?|"
+    r"Terrace|Ter\.?|Way|Alley|Broadway|Bowery|Concourse|Turnpike|Route|"
+    r"Plaza|Square|Pier|Market|Mews|Crescent|Circle|Row|Walk"
+)
+STREET_CORE = rf"{DIRECTION}{STREET_NAME}(?:{STREET_SUFFIX})"
+INTERSECTION = rf"(?:\s*,?\s*(?:at|near|between|and|corner of|off)\s+{STREET_CORE})?"
+LOCALITY = (
+    r"(?:\s*,?\s*(?:Brooklyn|Queens|Bronx|Manhattan|Staten Island|New York City|"
+    r"New York|NYC|Jersey City|Hoboken|Long Island City|Flushing|Astoria|Harlem))?"
+)
+STATE_ZIP = r"(?:\s*,?\s*(?:NY|New York|NJ|New Jersey)\s*\d{5}(?:-\d{4})?)?"
+
+US_NUMERIC_RE = re.compile(
+    rf"(?<![\w/])(?:No\.?\s*)?\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+"
+    rf"{STREET_CORE}{INTERSECTION}{LOCALITY}{STATE_ZIP}",
+    re.I,
+)
+US_SPELLED_HOUSE_RE = re.compile(
+    rf"(?<!\w)(?:{HOUSE_WORD})(?:[- ](?:{HOUSE_WORD})){{0,4}}\s+{STREET_CORE}{INTERSECTION}{LOCALITY}{STATE_ZIP}",
+    re.I,
+)
+US_ORDINAL_STREET_RE = re.compile(
+    rf"(?<![\w/])\d{{1,5}}(?:-\d{{1,5}})?[A-Za-z]?(?:\s*½)?\s+{DIRECTION}"
+    rf"(?:{ORDINAL_WORD})\s+(?:Street|Avenue|Road|Place|Lane|Drive|Boulevard)\b"
+    rf"{INTERSECTION}{LOCALITY}{STATE_ZIP}",
+    re.I,
+)
+INTL_PREFIX = (
+    r"rue|quai|avenue|boulevard|via|viale|piazza|calle|carrer|strada|straße|"
+    r"strasse|platz|weg|gasse|chome|dori|hutong|chemin|cours|passage|allée|"
+    r"allee|promenade|rua|rue du|rue de la|rue des|avenida|paseo"
+)
+INTL_NUMERIC_RE = re.compile(
+    rf"(?<!\w)\d{{1,5}}(?:[-/]\d{{1,5}})?\s+(?:{INTL_PREFIX})\s+"
+    rf"(?:{STREET_TOKEN}\s*){{1,10}}",
+    re.I,
+)
+INTL_REVERSED_RE = re.compile(
+    rf"(?<!\w)(?:{INTL_PREFIX})\s+(?:{STREET_TOKEN}\s+){{1,9}}\d{{1,5}}(?:[-/]\d{{1,5}})?\b",
+    re.I,
+)
+UK_RE = re.compile(
+    rf"(?<!\w)\d{{1,5}}[A-Za-z]?(?:-\d{{1,5}})?\s+(?:{STREET_TOKEN}\s+){{1,8}}"
+    r"(?:Street|St\.?|Road|Rd\.?|Lane|Ln\.?|Square|Place|Way|Mews|Gardens|Crescent|Terrace)"
+    r"(?:\s*,?\s*(?:London|Edinburgh|Glasgow|Manchester|Bristol))?(?:\s+[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})?",
+    re.I,
+)
+PARTIAL_LOCATION_RE = re.compile(
+    rf"\b(?:at|on|near|opposite|across from|corner of|between|off)\s+(?:the\s+)?{STREET_CORE}"
+    rf"(?:\s*,?\s*(?:and|at|near|between)\s+{STREET_CORE})?",
+    re.I,
+)
+ADDRESS_CUE_RE = re.compile(
+    rf"\b(?:{STREET_SUFFIX}|{INTL_PREFIX})\b|\b\d{{1,5}}\s+(?:{STREET_TOKEN}\s+){{0,5}}(?:{STREET_SUFFIX})\b|"
+    r"\b(?:address|located at|location)\b",
+    re.I,
+)
+
+GENERIC_TITLES = {
+    "tables for two", "tables for two the new yorker", "new spot", "the language barrier",
+    "three in one", "hard workers", "all new", "on her own", "from east and west",
+    "the old and the new", "getting away from it all",
+}
+NAME_STOPWORDS = {
+    "the", "a", "an", "restaurant", "cafe", "café", "bar", "club", "hotel", "grill",
+    "house", "kitchen", "room", "at", "and", "of", "new", "york", "located", "open",
+}
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def normalize_space(value: Any) -> str:
+    return re.sub(r"\s+", " ", html_lib.unescape(str(value or ""))).strip()
+
+
+def ascii_fold(value: Any) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", str(value or "")) if not unicodedata.combining(c))
+
+
+def norm_identity(value: Any) -> str:
+    s = ascii_fold(value).lower().replace("&", " and ")
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(t for t in s.split() if t not in NAME_STOPWORDS)
+
+
+def norm_address(value: Any) -> str:
+    s = f" {ascii_fold(value).lower()} "
+    replacements = {
+        " street ": " st ", " avenue ": " ave ", " road ": " rd ",
+        " boulevard ": " blvd ", " place ": " pl ", " drive ": " dr ",
+        " lane ": " ln ", " court ": " ct ", " terrace ": " ter ",
+        " parkway ": " pkwy ", " highway ": " hwy ",
+        " new york city ": " new york ", " united states of america ": " united states ",
+    }
+    for a, b in replacements.items():
+        s = s.replace(a, b)
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def stable_id(*parts: Any) -> str:
+    raw = "\x1f".join(str(p or "") for p in parts)
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def truncate_words(text: str, max_words: int = 28) -> str:
+    words = normalize_space(text).split()
+    if len(words) <= max_words:
+        return " ".join(words)
+    return " ".join(words[:max_words]) + " …"
+
+
+def canonicalize_newyorker_url(url: str) -> str:
+    if not url:
+        return ""
+    if url.startswith("/"):
+        url = urllib.parse.urljoin("https://www.newyorker.com", url)
+    p = urllib.parse.urlparse(url)
+    path = p.path.rstrip("/")
+    if "%issue%" in path:
+        path = path.replace("%issue%", "%25issue%25")
+    return urllib.parse.urlunparse(("https", "www.newyorker.com", path, "", "", ""))
+
+
+@dataclasses.dataclass
+class FetchRecord:
+    requested_url: str
+    final_url: str
+    status: int
+    attempts: int
+    redirected: bool
+    content_type: str
+    bytes: int
+    error: str
+    fetched_at: str
+    purpose: str
+    elapsed_ms: int
+
+
+class HostRateLimiter:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.last: dict[str, float] = {}
+
+    def wait(self, url: str, delay: float) -> None:
+        host = urllib.parse.urlparse(url).netloc.lower()
+        with self.lock:
+            elapsed = time.monotonic() - self.last.get(host, 0.0)
+            if elapsed < delay:
+                time.sleep(delay - elapsed)
+            self.last[host] = time.monotonic()
+
+
+class Fetcher:
+    def __init__(self) -> None:
+        self.rate = HostRateLimiter()
+        self.records: list[FetchRecord] = []
+        self.records_lock = threading.Lock()
+        self.local = threading.local()
+
+    def session(self) -> requests.Session:
+        if not hasattr(self.local, "session"):
+            s = requests.Session()
+            retries = Retry(
+                total=0, connect=0, read=0, redirect=3,
+                status_forcelist=[], allowed_methods=frozenset(["GET", "HEAD"]),
+            )
+            s.mount("https://", HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20))
+            s.headers.update({
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+            })
+            self.local.session = s
+        return self.local.session
+
+    def get(
+        self,
+        url: str,
+        purpose: str,
+        *,
+        delay: float | None = None,
+        timeout: float | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> requests.Response | None:
+        delay = NY_DELAY if delay is None else delay
+        timeout = REQUEST_TIMEOUT if timeout is None else timeout
+        last_error = ""
+        response: requests.Response | None = None
+        started = time.monotonic()
+        for attempt in range(1, MAX_RETRIES + 1):
+            self.rate.wait(url, delay)
+            try:
+                response = self.session().get(url, timeout=timeout, allow_redirects=True, headers=headers)
+                if response.status_code in {408, 425, 429, 500, 502, 503, 504} and attempt < MAX_RETRIES:
+                    retry_after = response.headers.get("Retry-After", "")
+                    pause = float(retry_after) if retry_after.isdigit() else min(45.0, 2.0 ** attempt + random.random())
+                    time.sleep(pause)
+                    continue
+                break
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < MAX_RETRIES:
+                    time.sleep(min(30.0, 2.0 ** attempt + random.random()))
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if response is None:
+            rec = FetchRecord(url, "", 0, MAX_RETRIES, False, "", 0, last_error, now_iso(), purpose, elapsed_ms)
+        else:
+            rec = FetchRecord(
+                url, response.url, response.status_code, attempt,
+                response.url.rstrip("/") != url.rstrip("/"), response.headers.get("content-type", ""),
+                len(response.content), last_error, now_iso(), purpose, elapsed_ms,
+            )
+        with self.records_lock:
+            self.records.append(rec)
+        return response
+
+
+fetcher = Fetcher()
+
+
+def write_csv(path: Path, fieldnames: Sequence[str], rows: Iterable[dict[str, Any]]) -> int:
+    rows = list(rows)
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(fieldnames), extrasaction="ignore", quoting=csv.QUOTE_MINIMAL)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+    return len(rows)
+
+
+def parse_editorial_links(html_text: str) -> tuple[list[str], int]:
+    soup = BeautifulSoup(html_text, "lxml")
+    main = soup.find("main") or soup
+    links: list[str] = []
+    card_blocks = main.find_all(["article", "li"], recursive=True)
+    for a in main.find_all("a", href=True):
+        href = html_lib.unescape(a.get("href", "")).split("#", 1)[0]
+        if href.startswith("/"):
+            href = urllib.parse.urljoin("https://www.newyorker.com", href)
+        p = urllib.parse.urlparse(href)
+        if p.netloc not in {"www.newyorker.com", "newyorker.com"}:
+            continue
+        path = p.path.rstrip("/")
+        if not ARTICLE_PATH_RE.match(path):
+            continue
+        url = canonicalize_newyorker_url(href)

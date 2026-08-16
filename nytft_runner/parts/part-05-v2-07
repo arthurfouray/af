@@ -1,0 +1,100 @@
+                            scored.sort(reverse=True, key=lambda x: x[0])
+                            address = scored[0][1]
+                        website = ""
+                        place_id = ""
+                        for s in strings:
+                            if re.fullmatch(r"ChI[A-Za-z0-9_-]{10,}", s):
+                                place_id = s
+                            if "/url?q=" in s:
+                                decoded = s.replace("\\u003d", "=").replace("\\u0026", "&")
+                                try:
+                                    candidate_url = urllib.parse.unquote(decoded.split("/url?q=", 1)[1].split("&", 1)[0])
+                                except Exception:
+                                    candidate_url = ""
+                                if candidate_url.startswith("http") and "google." not in urllib.parse.urlparse(candidate_url).netloc:
+                                    website = candidate_url
+                            elif s.startswith("http") and "google." not in urllib.parse.urlparse(s).netloc:
+                                website = s
+                        categories: list[str] = []
+                        for candidate in obj[i + 1:i + 12]:
+                            if isinstance(candidate, list) and candidate and all(isinstance(x, str) for x in candidate):
+                                vals = [normalize_space(x) for x in candidate if normalize_space(x)]
+                                if vals and len(vals) <= 6 and not any(re.search(r"\d", x) for x in vals):
+                                    categories = vals
+                                    break
+                        try:
+                            cid = str(int(item.split(":", 1)[1], 16))
+                        except Exception:
+                            cid = ""
+                        key = (norm_identity(name), round(coords[0], 7), round(coords[1], 7))
+                        if key not in seen:
+                            seen.add(key)
+                            maps_url = (
+                                f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name + ', ' + (address or source_address))}&query_place_id={urllib.parse.quote(place_id)}"
+                                if place_id else (f"https://maps.google.com/?cid={cid}" if cid else "")
+                            )
+                            places.append({
+                                "name": name, "address": address, "address_candidates": unique_addresses,
+                                "latitude": coords[0], "longitude": coords[1], "place_hex": item,
+                                "cid": cid, "place_id": place_id, "maps_url": maps_url,
+                                "website": website, "categories": categories,
+                            })
+                recurse(item)
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                recurse(value)
+    recurse(data)
+    return places
+
+
+def _google_query_url(query: str) -> str:
+    return "https://www.google.com/search?" + urllib.parse.urlencode({
+        "tbm": "map", "authuser": "0", "hl": "en", "gl": "us", "q": query,
+    })
+
+
+def google_maps_lookup(name: str, address: str, locality_hint: str = "", place_id: str = "") -> dict[str, Any]:
+    canonical = canonical_address_text(address)
+    queries: list[tuple[str, str]] = []
+    def add(kind: str, query: str) -> None:
+        query = normalize_space(query.strip(" ,"))
+        if query and all(q != query for _, q in queries):
+            queries.append((kind, query))
+    if place_id:
+        add("identity", f"{name} {place_id}")
+    add("identity", ", ".join(x for x in [name, canonical, locality_hint] if x))
+    add("identity", ", ".join(x for x in [name, address, locality_hint] if x))
+    add("identity", ", ".join(x for x in [name, locality_hint] if x))
+    add("address", ", ".join(x for x in [canonical, locality_hint] if x))
+    add("address", ", ".join(x for x in [address, locality_hint] if x))
+
+    all_places: list[dict[str, Any]] = []
+    query_log: list[dict[str, Any]] = []
+    for kind, query in queries:
+        url = _google_query_url(query)
+        response = fetcher.get(url, "google-maps-verification", delay=MAP_DELAY, timeout=30,
+            headers={"Accept": "application/json,text/plain,*/*", "User-Agent": USER_AGENT})
+        status = response.status_code if response is not None else 0
+        places = parse_google_maps_response(response.text, name, address) if response is not None and status == 200 else []
+        for place in places:
+            place["query_kind"] = kind
+            place["query"] = query
+        all_places.extend(places)
+        query_log.append({"kind": kind, "query": query, "url": url, "status": status, "place_count": len(places)})
+        if kind == "identity" and any(name_similarity(name, p.get("name", "")) >= 0.80 and address_similarity(address, p.get("address", ""))[0] for p in places):
+            break
+    dedup: dict[tuple[str, float, float], dict[str, Any]] = {}
+    for p in all_places:
+        key = (norm_identity(p.get("name", "")), round(float(p.get("latitude", 0)), 7), round(float(p.get("longitude", 0)), 7))
+        if key not in dedup or (not dedup[key].get("address") and p.get("address")):
+            dedup[key] = p
+    places = list(dedup.values())
+    return {
+        "ok": bool(places), "query": queries[0][1] if queries else "", "queries": query_log,
+        "places": places, "reason": "" if places else "no parseable Google Maps place result across identity and address queries",
+    }
+
+
+def _coordinate_distance_km(place: dict[str, Any], aux: dict[str, Any] | None) -> float | None:
+    if not aux or aux.get("latitude") in {None, ""} or aux.get("longitude") in {None, ""}:
+        return None

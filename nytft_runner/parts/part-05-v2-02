@@ -1,0 +1,100 @@
+    after_house = parts[1:]
+    if not any(p[:1].isupper() for p in after_house):
+        return False
+    # Bare "Two Way" / "One Place" is too ambiguous to publish.
+    if len(parts) <= 2 or (len(parts) == 3 and parts[-1].lower().rstrip(".") in {"way", "place", "drive", "lane", "road", "court"}):
+        return False
+    return True
+
+
+def strict_address_candidate(raw: str, pattern_type: str = "") -> tuple[bool, str]:
+    raw = trim_address(raw)
+    if PHONE_RE.fullmatch(raw):
+        return False, "phone number"
+    if _V2_STRICT_NUMERIC_FULL.fullmatch(raw) or _V2_STRICT_AVE_LETTER_FULL.fullmatch(raw):
+        # U.S. street names are normally title-cased, numeric, or standard directional forms.
+        # This rejects prose fragments such as “1885 and is the last survivor ... Herald Square.”
+        tail = re.sub(r"^(?:No\.?\s*)?\d{1,5}(?:-\d{1,5})?[A-Za-z]?(?:\s*½)?\s+", "", raw, flags=re.I)
+        if re.search(r"\b(?:is|was|were|has|have|had|opened|serves|offers|features|survivor|arrives|comes|wears|wore|included|including)\b", tail, re.I):
+            return False, "numeric candidate contains prose rather than a street name"
+        if _V2_OBVIOUS_PROSE.search(raw):
+            return False, "numeric candidate contains prose rather than a street name"
+        return True, "strict numeric street-address syntax"
+    if pattern_type == "us_spelled_house" and _spelled_address_is_plausible(raw):
+        return True, "strict spelled-house street-address syntax"
+    if pattern_type.startswith("international") or pattern_type == "uk_numeric":
+        if re.search(r"\d", raw) and len(raw) <= 180:
+            return True, "international street-address syntax"
+    if pattern_type == "auxiliary_source_recovery" and re.search(r"\d", raw) and ADDRESS_CUE_RE.search(raw):
+        return True, "source-corroborated auxiliary street address"
+    return False, "candidate failed strict postal-address syntax"
+
+
+def trim_address(value: str) -> str:
+    value = normalize_space(value)
+    # Trim only clear clause continuations after an already complete-looking suffix.
+    value = re.sub(r"[)\];,:]+$", "", value)
+    value = re.sub(r"\.(?=\s*$)", "", value)
+    return value.strip(" ,;()[]")
+
+
+
+def _refine_nested_address(raw: str, pattern_type: str) -> tuple[str, int]:
+    """Prefer a later, shorter street address when a year or prose number starts a greedy match."""
+    candidates: list[tuple[int, str]] = []
+    for m in re.finditer(r"(?<![\w-])\d{1,5}(?:-\d{1,5})?", raw):
+        if m.start() == 0:
+            continue
+        fragment = raw[m.start():]
+        for pattern in (_V2_AVE_LETTER_RE, _V2_NUMERIC_RE):
+            mm = pattern.match(fragment)
+            if mm:
+                value = trim_address(mm.group(0))
+                ok, _ = strict_address_candidate(value, "us_numeric")
+                if ok:
+                    candidates.append((m.start(), value))
+    if candidates:
+        candidates.sort(key=lambda x: (len(x[1]), -x[0]))
+        return candidates[0][1], candidates[0][0]
+    return raw, 0
+
+def extract_address_matches(text: str) -> list[dict[str, Any]]:
+    patterns = [
+        ("us_numeric", "complete", _V2_AVE_LETTER_RE),
+        ("us_numeric", "complete", _V2_NUMERIC_RE),
+        ("us_spelled_house", "complete", _V2_SPELLED_RE),
+        ("international_numeric", "complete", INTL_NUMERIC_RE),
+        ("international_reversed", "complete", INTL_REVERSED_RE),
+        ("uk_numeric", "complete", UK_RE),
+        ("partial_location", "partial", _V2_PARTIAL_RE),
+    ]
+    out: list[dict[str, Any]] = []
+    occupied: list[tuple[int, int]] = []
+    for pattern_type, completeness, pattern in patterns:
+        for m in pattern.finditer(text):
+            span = m.span()
+            if any(max(span[0], a) < min(span[1], b) for a, b in occupied):
+                continue
+            raw = trim_address(m.group(0))
+            nested_offset = 0
+            if completeness == "complete" and pattern_type == "us_numeric":
+                raw, nested_offset = _refine_nested_address(raw, pattern_type)
+                if nested_offset:
+                    span = (span[0] + nested_offset, span[0] + nested_offset + len(raw))
+            if len(raw) < 5:
+                continue
+            if completeness == "complete":
+                plausible, reason = strict_address_candidate(raw, pattern_type)
+                if not plausible:
+                    # Keep the occurrence, but explicitly fail it closed.
+                    out.append({
+                        "pattern_type": pattern_type,
+                        "address_completeness": "invalid",
+                        "raw_address": raw,
+                        "start": span[0], "end": span[1],
+                        "syntax_reason": reason,
+                    })
+                    occupied.append(span)
+                    continue
+            occupied.append(span)
+            out.append({
