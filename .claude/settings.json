@@ -1,10 +1,79 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "effortLevel": "high",
+  "maxEffortLevel": "high",
   "modelSettings": {
-    "claude-fable-5-1": { "effort": "high" },
-    "claude-fable-5": { "effort": "high" },
-    "claude-opus-5": { "effort": "high" }
+    "claude-fable-5-1": {
+      "effortLevel": "high",
+      "maxEffortLevel": "high"
+    },
+    "claude-fable-5": {
+      "effortLevel": "high",
+      "maxEffortLevel": "high"
+    },
+    "claude-opus-5": {
+      "effortLevel": "high",
+      "maxEffortLevel": "high"
+    },
+    "claude-sonnet-5": {
+      "effortLevel": "high",
+      "maxEffortLevel": "high"
+    }
   },
-  "ultracode": false,
-  "autoCompactWindow": 200000
+  "autoCompactWindow": 200000,
+  "workflowKeywordTriggerEnabled": false,
+  "workflowSizeGuideline": "small",
+  "bashOutputMaxChars": 8000,
+  "taskOutputMaxChars": 8000,
+  "enableAllProjectMcpServers": false,
+  "promptSuggestionEnabled": false,
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git rev-parse *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(file *)",
+      "Bash(find *)",
+      "Bash(jq *)",
+      "Bash(base64 *)",
+      "Bash(gzip *)",
+      "Bash(mkdir -p *)"
+    ],
+    "deny": [
+      "Read(./payload/*.b64)",
+      "Read(./payload/final_chunks/*.b64)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c 'if ((.tool_input.file_path // \"\") | test(\"\\\\.b64$\")) then {hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"Blocked: payload/*.b64 is gzip+base64 \u2014 unreadable and ~2k tokens per file. Decode first: base64 -d FILE | gzip -dc > /tmp/af-work/NAME.py, then read the .py. See CLAUDE.md.\"}} else {} end'",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c 'if ((.tool_input.command // \"\") | test(\"(^|[;&|]|\\\\bdo |\\\\bthen )[[:space:]]*(cat|head|tail|less|more|bat|nl|xxd|od|strings|sed|awk)\\\\b[^|;&\\\\n]*\\\\.b64\")) then {hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"Blocked: dumping a payload/*.b64 file burns ~2k tokens of unreadable base64. Decode first: base64 -d FILE | gzip -dc > /tmp/af-work/NAME.py, then read the .py. See CLAUDE.md.\"}} else {} end'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }

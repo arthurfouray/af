@@ -15,6 +15,8 @@ listings. Outputs are uploaded as workflow artifacts and are never committed.
 
 Decode once into a scratch dir, then read the decoded `.py`. Never read the
 `.b64` files directly — they are unreadable and burn a lot of context.
+Two `PreToolUse` hooks in `.claude/settings.json` enforce this; the block
+message repeats the decode command.
 
 ```bash
 mkdir -p /tmp/af-work
