@@ -1,0 +1,10 @@
+{
+  "effortLevel": "high",
+  "modelSettings": {
+    "claude-fable-5-1": { "effort": "high" },
+    "claude-fable-5": { "effort": "high" },
+    "claude-opus-5": { "effort": "high" }
+  },
+  "ultracode": false,
+  "autoCompactWindow": 200000
+}
