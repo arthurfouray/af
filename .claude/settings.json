@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "effortLevel": "high",
+
+  "fastModePerSessionOptIn": true,
+
+  "skillListingBudgetFraction": 0.005,
+  "skillListingMaxDescChars": 600,
+
+  "workflowSizeGuideline": "small",
+  "teammateDefaultModel": "sonnet",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sed -n:*)",
+      "Bash(python3 -m py_compile:*)"
+    ]
+  }
+}
