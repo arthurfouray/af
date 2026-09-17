@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_run_id:
-        description: Run ID of a successful "New Yorker Tables for Two full audit" run (default: latest successful)
+        description: 'Run ID of a successful full-audit run (default: latest successful)'
         required: false
         default: ''
 
