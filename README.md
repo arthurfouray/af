@@ -12,4 +12,6 @@ Temporary reproducible research workflows used to generate auditable datasets. G
 - `.github/actions/setup-nytft/` — shared Python setup used by both workflows.
 - `.github/workflows/` — `newyorker_tables_for_two_audit.yml`, `nytft_final_verify.yml`, `cancel-stale-nytft.yml`.
 
+The verification workflow needs the artifact of a recent successful run of the full-audit workflow (`nytft-full-audit.yml`, which lives on branch `nytft-full-audit-20260807`). It uses the latest successful run, or the run ID passed as the `upstream_run_id` dispatch input. Artifacts expire after 7 days.
+
 Scripts read their input and output locations from environment variables (`NYTFT_WORK_ROOT`, `NYTFT_EXHAUSTIVE_ROOT`, `UPSTREAM_ROOT`, `INPUT_B64`, `OUTPUT_DIR`); the workflows show the values used in CI.

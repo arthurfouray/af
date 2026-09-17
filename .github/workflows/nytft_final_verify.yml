@@ -17,6 +17,11 @@ on:
       - .github/workflows/nytft_final_verify.yml
       - .github/actions/setup-nytft/action.yml
   workflow_dispatch:
+    inputs:
+      upstream_run_id:
+        description: Run ID of a successful "New Yorker Tables for Two full audit" run (default: latest successful)
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -33,9 +38,22 @@ jobs:
       - name: Download exhaustive crawl artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          # Optional explicit run ID; otherwise the latest successful full-audit run is used.
+          UPSTREAM_RUN_ID: ${{ inputs.upstream_run_id }}
         run: |
+          run_id="$UPSTREAM_RUN_ID"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow nytft-full-audit.yml --status success --limit 1 \
+              --json databaseId --jq '.[0].databaseId')
+          fi
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::No successful 'New Yorker Tables for Two full audit' run found; run that workflow (branch nytft-full-audit-20260807) first. Artifacts expire after 7 days."
+            exit 1
+          fi
+          echo "Using full-audit run $run_id"
           mkdir -p upstream_artifact
-          gh run download 31206158007 \
+          gh run download "$run_id" \
             --repo "$GITHUB_REPOSITORY" \
             --name newyorker-tables-for-two-full-audit \
             --dir upstream_artifact
