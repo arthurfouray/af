@@ -43,12 +43,14 @@ jobs:
         run: |
           run_id="$UPSTREAM_RUN_ID"
           if [ -z "$run_id" ]; then
+            # Artifacts are retained for 7 days, so only consider runs younger than that.
             run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
               --workflow nytft-full-audit.yml --status success --limit 1 \
+              --created ">$(date -u -d '-6 days' +%F)" \
               --json databaseId --jq '.[0].databaseId')
           fi
           if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
-            echo "::error::No successful 'New Yorker Tables for Two full audit' run found; run that workflow (branch nytft-full-audit-20260807) first. Artifacts expire after 7 days."
+            echo "::error::No successful 'New Yorker Tables for Two full audit' run within the last 6 days; dispatch that workflow (branch nytft-full-audit-20260807) first, or pass upstream_run_id."
             exit 1
           fi
           echo "Using full-audit run $run_id"
