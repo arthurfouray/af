@@ -88,16 +88,48 @@ jobs:
           open(f'{out}/headers.txt', 'w').write('\n'.join(lines))
           PY
 
+      - name: Verify document transfer encoding with a real GET
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          pages = json.loads(os.environ['PAGES_JSON'])
+          ua = os.environ['UA']
+          out = os.environ['OUTPUT_DIR']
+          keep = ('http/', 'content-encoding', 'content-length', 'cache-control',
+                  'vary', 'x-cache', 'transfer-encoding', 'content-type')
+          lines = []
+          for url in pages:
+              # A HEAD request can hide compression, so issue a real GET and
+              # measure the bytes that actually cross the wire.
+              r = subprocess.run(
+                  ['curl', '-sS', '-o', '/dev/null', '-D', '-', '-A', ua,
+                   '-H', 'Accept-Encoding: br, gzip, deflate',
+                   '--max-time', '60', '-w',
+                   'WIRE_BYTES=%{size_download}\\nTIME_TOTAL=%{time_total}\\n', url],
+                  capture_output=True, text=True)
+              lines.append(f'--- GET {url}')
+              for ln in r.stdout.splitlines():
+                  low = ln.strip().lower()
+                  if low.startswith(keep) or ln.startswith(('WIRE_BYTES', 'TIME_TOTAL')):
+                      lines.append('    ' + ln.strip())
+          text = '\n'.join(lines)
+          print(text)
+          open(f'{out}/compression.txt', 'w').write(text)
+          PY
+
       - name: Run Lighthouse against the home page
         continue-on-error: true
         run: |
           npm install -g lighthouse@12 >/dev/null 2>&1
           HOME_URL=$(python -c "import json,os;print(json.loads(os.environ['PAGES_JSON'])[0])")
+          # Lighthouse defaults to the mobile form factor, so mobile takes no
+          # preset at all. Passing an empty --preset is rejected outright.
           for FORM in mobile desktop; do
+            PRESET=""
+            [ "$FORM" = desktop ] && PRESET="--preset=desktop"
             lighthouse "$HOME_URL" \
               --quiet \
-              --preset="$([ "$FORM" = desktop ] && echo desktop || echo '')" \
-              --form-factor="$FORM" \
+              $PRESET \
               --only-categories=performance \
               --output=json \
               --output-path="$OUTPUT_DIR/lighthouse_${FORM}.json" \
