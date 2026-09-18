@@ -278,6 +278,44 @@ def print_lighthouse(path: Path) -> None:
             print('  Image formats actually served:')
             for mt, n in img_mimes.most_common():
                 print(f'      {mt:<24} {n}')
+        # Same bytes fetched more than once is pure waste and is fixable in
+        # markup, so report exact-URL repeats and same-file-different-URL
+        # repeats separately: they have different causes and different fixes.
+        url_counts = Counter(i.get('url', '') for i in nr
+                             if i.get('resourceType') == 'Image')
+        exact_dupes = {u: n for u, n in url_counts.items() if n > 1}
+        if exact_dupes:
+            print('  SAME URL REQUESTED MORE THAN ONCE:')
+            for u, n in sorted(exact_dupes.items(), key=lambda kv: -kv[1]):
+                print(f'      {n}x  {u[:150]}')
+        else:
+            print('  No image URL was requested more than once.')
+
+        by_file = defaultdict(list)
+        for i in nr:
+            if i.get('resourceType') != 'Image':
+                continue
+            by_file[str(i.get('url', '')).split('/')[-1].split('?')[0]].append(i)
+        repeats = {f: v for f, v in by_file.items() if len(v) > 1}
+        if repeats:
+            print('  SAME FILE FETCHED VIA MORE THAN ONE URL:')
+            for fname, items in sorted(
+                    repeats.items(),
+                    key=lambda kv: -sum(i.get('transferSize') or 0 for i in kv[1])):
+                total = sum(i.get('transferSize') or 0 for i in items)
+                waste = total - max(i.get('transferSize') or 0 for i in items)
+                print(f'      {fname[:64]}  {len(items)} fetches  '
+                      f'total {kb(total)}  avoidable {kb(waste)}')
+                for i in items:
+                    print(f'          {kb(i.get("transferSize")):>11}  '
+                          f'start {ms(i.get("networkRequestTime")):>9}  '
+                          f'{str(i.get("url",""))[:132]}')
+            grand = sum(
+                sum(i.get('transferSize') or 0 for i in v)
+                - max(i.get('transferSize') or 0 for i in v)
+                for v in repeats.values())
+            print(f'  Total avoidable image bytes from repeats: {kb(grand)}')
+
         imgs = sorted([i for i in nr if i.get('resourceType') == 'Image'],
                       key=lambda i: -(i.get('transferSize') or 0))[:15]
         if imgs:
