@@ -5,10 +5,12 @@ on:
     paths:
       - scripts/newyorker_tables_for_two_audit.py
       - .github/workflows/newyorker_tables_for_two_audit.yml
+      - .github/actions/setup-nytft/action.yml
   pull_request:
     paths:
       - scripts/newyorker_tables_for_two_audit.py
       - .github/workflows/newyorker_tables_for_two_audit.yml
+      - .github/actions/setup-nytft/action.yml
       - audit-triggers/**
   workflow_dispatch:
 
@@ -18,13 +20,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml urllib3
+      - uses: ./.github/actions/setup-nytft
       - name: Run live crawl and verification
         env:
           OUTPUT_DIR: newyorker_tables_for_two_audit

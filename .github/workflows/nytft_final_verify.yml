@@ -3,18 +3,25 @@ name: New Yorker Tables for Two final verification
 on:
   push:
     paths:
-      - payload/nytft_final_verify.py.gz.b64
+      - scripts/prepare_final_candidates.py
+      - scripts/nytft_final_verify.py
       - payload/repair_v6.py.gz.b64
-      - payload/prepare_final_candidates.py.gz.b64
       - .github/workflows/nytft_final_verify.yml
+      - .github/actions/setup-nytft/action.yml
   pull_request:
     paths:
       - audit-triggers/nytft-final-verify-*.txt
-      - payload/nytft_final_verify.py.gz.b64
+      - scripts/prepare_final_candidates.py
+      - scripts/nytft_final_verify.py
       - payload/repair_v6.py.gz.b64
-      - payload/prepare_final_candidates.py.gz.b64
       - .github/workflows/nytft_final_verify.yml
+      - .github/actions/setup-nytft/action.yml
   workflow_dispatch:
+    inputs:
+      upstream_run_id:
+        description: 'Run ID of a successful full-audit run (default: latest successful)'
+        required: false
+        default: ''
 
 permissions:
   actions: read
@@ -25,59 +32,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - name: Check out verifier branch
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml urllib3
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nytft
 
       - name: Download exhaustive crawl artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          # Optional explicit run ID; otherwise the latest successful full-audit run is used.
+          UPSTREAM_RUN_ID: ${{ inputs.upstream_run_id }}
         run: |
+          run_id="$UPSTREAM_RUN_ID"
+          if [ -z "$run_id" ]; then
+            # Artifacts are retained for 7 days, so only consider runs younger than that.
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow nytft-full-audit.yml --status success --limit 1 \
+              --created ">$(date -u -d '-6 days' +%F)" \
+              --json databaseId --jq '.[0].databaseId')
+          fi
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::No successful 'New Yorker Tables for Two full audit' run within the last 6 days; dispatch that workflow (branch nytft-full-audit-20260807) first, or pass upstream_run_id."
+            exit 1
+          fi
+          echo "Using full-audit run $run_id"
           mkdir -p upstream_artifact
-          gh run download 31206158007 \
+          gh run download "$run_id" \
             --repo "$GITHUB_REPOSITORY" \
             --name newyorker-tables-for-two-full-audit \
             --dir upstream_artifact
           find upstream_artifact -maxdepth 3 -type f -printf '%p %s bytes\n' | sort | head -80
 
-      - name: Decode and validate source-repair tools
+      - name: Decode and validate source-repair tool
         run: |
+          set -o pipefail
           mkdir -p work
-          base64 -d payload/repair_v6.py.gz.b64 | gzip -dc > work/repair_v6.py
-          base64 -d payload/prepare_final_candidates.py.gz.b64 | gzip -dc > work/prepare_final_candidates.py
-          base64 -d payload/nytft_final_verify.py.gz.b64 | gzip -dc > work/nytft_final_verify.py
-          # The first candidate-preparation payload used a local default. Make the
-          # decoded copy portable even when this workflow is rerun from an older ref.
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('work/prepare_final_candidates.py')
-          s=p.read_text()
-          if "import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json\n" in s:
-              s=s.replace("import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json\n", "import csv, importlib.util, sys, contextlib, io, re, urllib.parse, json, os\n")
-          old="ROOT=Path('/mnt/data')\nLEDGER=ROOT/'nytft_exhaustive/nytft_output/https___www.newyorker.com_magazine_tables-for-two - source occurrence ledger.csv'\nAUX=ROOT/'nytft_exhaustive/nytft_output/https___www.newyorker.com_magazine_tables-for-two - auxiliary evidence.csv'\n"
-          new="ROOT=Path(os.environ.get('NYTFT_WORK_ROOT','/mnt/data')).resolve()\nEXHAUSTIVE_ROOT=Path(os.environ.get('NYTFT_EXHAUSTIVE_ROOT',str(ROOT/'nytft_exhaustive'))).resolve()\nLEDGER=EXHAUSTIVE_ROOT/'nytft_output/https___www.newyorker.com_magazine_tables-for-two - source occurrence ledger.csv'\nAUX=EXHAUSTIVE_ROOT/'nytft_output/https___www.newyorker.com_magazine_tables-for-two - auxiliary evidence.csv'\n"
-          if old in s:
-              s=s.replace(old,new)
-          p.write_text(s)
-          PY
-          python -m py_compile work/repair_v6.py work/prepare_final_candidates.py work/nytft_final_verify.py
-          sha256sum work/*.py
+          if ! base64 -d payload/repair_v6.py.gz.b64 | gzip -dc > work/repair_v6.py; then
+            echo "::error file=payload/repair_v6.py.gz.b64::repair_v6 payload does not decode cleanly; re-encode it from a known-good repair_v6.py"
+            exit 1
+          fi
+          python -m py_compile work/repair_v6.py scripts/prepare_final_candidates.py scripts/nytft_final_verify.py
+          sha256sum work/repair_v6.py scripts/prepare_final_candidates.py scripts/nytft_final_verify.py
 
       - name: Prepare source-corrected candidates
         env:
           NYTFT_WORK_ROOT: ${{ github.workspace }}/work
           NYTFT_EXHAUSTIVE_ROOT: ${{ github.workspace }}/upstream_artifact
         run: |
-          python work/prepare_final_candidates.py | tee work/prepare_candidates.log
+          python scripts/prepare_final_candidates.py | tee work/prepare_candidates.log
           gzip -9 -n -c work/final_candidates_input.csv | base64 -w0 > work/final_candidates_input.csv.gz.b64
           python - <<'PY'
           import csv
@@ -95,7 +95,7 @@ jobs:
           OUTPUT_DIR: ${{ github.workspace }}/nytft_final_verification
           MAX_GEOCODES: '0'
         run: |
-          python work/nytft_final_verify.py | tee work/final_verification.log
+          python scripts/nytft_final_verify.py | tee work/final_verification.log
 
       - name: Inspect final verification output
         if: always()
@@ -115,8 +115,8 @@ jobs:
             work/prepare_candidates.log
             work/final_verification.log
             work/repair_v6.py
-            work/prepare_final_candidates.py
-            work/nytft_final_verify.py
+            scripts/prepare_final_candidates.py
+            scripts/nytft_final_verify.py
           if-no-files-found: error
           retention-days: 7
 
