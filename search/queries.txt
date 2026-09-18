@@ -1,0 +1,26 @@
+# One regression query per line: query <TAB> expected first result path.
+# Fill in and extend. Test in the site's search box after every batch of new entries.
+Spectre	/arthur-fouray-spectre
+Espace Quark	/arthur-fouray-spectre
+Geneva 2015	/arthur-fouray-spectre
+Genève	/arthur-fouray-spectre
+PPP+	/ppplus
+PPP plus	/ppplus
+playing cards	/ppplus
+NFT	/ppplus
+rt4a	/rt4a-index
+RT4A	/rt4a-index
+Scheherazade	/music
+Sheherazade	/music
+Rimsky-Korsakov	/music
+Galeries	/music
+To Japan	/music
+Welcome to the art world	/rt4a-welcome-to-the-art-world
+Silicon Malley	/exhibition-making
+Lausanne	/exhibition-making
+DOC Paris	/exhibition-making
+Screen	/curriculum-vitae
+Les presses du réel	/curriculum-vitae
+presses du reel	/curriculum-vitae
+CV	/curriculum-vitae
+curriculum	/curriculum-vitae
