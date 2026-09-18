@@ -1,0 +1,115 @@
+name: Arthur Fouray Systems site snapshot
+
+# Captures the rendered HTML of every page in the sitemap plus every
+# same-origin CSS and JS asset, and uploads the tree as a workflow artifact
+# so it can be analysed offline. Nothing is published to the site and
+# nothing is committed.
+
+on:
+  push:
+    paths:
+      - .github/workflows/af_site_snapshot.yml
+  workflow_dispatch:
+    inputs:
+      site:
+        description: Site origin to snapshot
+        required: false
+        default: 'https://arthurfouray.systems'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SITE: ${{ github.event.inputs.site || 'https://arthurfouray.systems' }}
+      OUT: ${{ github.workspace }}/snapshot
+      UA: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Fetch sitemap, pages and same-origin assets
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, urllib.parse, json, hashlib
+          from pathlib import Path
+          site = os.environ['SITE'].rstrip('/')
+          out = Path(os.environ['OUT']); out.mkdir(parents=True, exist_ok=True)
+          ua = os.environ['UA']
+          origin = urllib.parse.urlparse(site).netloc
+
+          def get(url, dest):
+              r = subprocess.run(['curl', '-sSL', '--compressed', '--max-time', '60', '-A', ua,
+                                  '-w', '%{http_code}', '-o', str(dest), url],
+                                 capture_output=True, text=True)
+              return r.stdout.strip()
+
+          code = get(site + '/sitemap.xml', out / 'sitemap.xml')
+          urls = []
+          if code == '200':
+              urls = re.findall(r'<loc>\s*(.*?)\s*</loc>', (out / 'sitemap.xml').read_text(errors='replace'))
+          urls = [u.strip() for u in urls]
+          if site + '/' not in urls and site not in urls:
+              urls.insert(0, site + '/')
+          # Cargo sites also expose pages through the home page's navigation.
+          home = out / 'home.html'
+          get(site + '/', home)
+          for m in re.finditer(r'href=["\']((?:https?://' + re.escape(origin) + r')?/[^"\'#?]*)["\']', home.read_text(errors='replace')):
+              u = m.group(1)
+              if u.startswith('/'):
+                  u = site + u
+              if u not in urls and not re.search(r'\.(jpg|jpeg|png|gif|webp|svg|pdf|css|js|xml|txt)$', u, re.I):
+                  urls.append(u)
+          urls = list(dict.fromkeys(urls))
+          print(len(urls), 'pages')
+
+          pages_dir = out / 'pages'; pages_dir.mkdir(exist_ok=True)
+          assets_dir = out / 'assets'; assets_dir.mkdir(exist_ok=True)
+          manifest = []
+          asset_urls = {}
+          for u in urls:
+              path = urllib.parse.urlparse(u).path.strip('/') or 'index'
+              slug = re.sub(r'[^A-Za-z0-9._-]+', '_', path)
+              dest = pages_dir / f'{slug}.html'
+              code = get(u, dest)
+              size = dest.stat().st_size if dest.exists() else 0
+              manifest.append({'url': u, 'file': f'pages/{slug}.html', 'status': code, 'bytes': size})
+              print(code, size, u)
+              if code != '200':
+                  continue
+              html = dest.read_text(errors='replace')
+              for m in re.finditer(r'(?:src|href)\s*=\s*["\']([^"\']+\.(?:css|js)(?:\?[^"\']*)?)["\']', html, re.I):
+                  a = m.group(1)
+                  if a.startswith('//'): a = 'https:' + a
+                  elif a.startswith('/'): a = site + a
+                  elif not a.startswith('http'): continue
+                  asset_urls.setdefault(a, set()).add(f'pages/{slug}.html')
+
+          for a, used_by in asset_urls.items():
+              p = urllib.parse.urlparse(a)
+              name = re.sub(r'[^A-Za-z0-9._-]+', '_', (p.netloc + p.path).strip('/'))
+              if p.query:
+                  name += '_' + hashlib.sha1(p.query.encode()).hexdigest()[:8] + ('.css' if p.path.endswith('.css') else '.js')
+              dest = assets_dir / name
+              code = get(a, dest)
+              manifest.append({'url': a, 'file': f'assets/{name}', 'status': code,
+                               'bytes': dest.stat().st_size if dest.exists() else 0,
+                               'used_by': sorted(used_by)})
+              print(code, a)
+
+          (out / 'manifest.json').write_text(json.dumps(manifest, indent=1))
+          home.unlink(missing_ok=True)
+          PY
+          du -sh "$OUT"; find "$OUT" -type f | wc -l
+
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: af-site-snapshot
+          path: snapshot/**
+          if-no-files-found: error
+          retention-days: 7
