@@ -1,0 +1,183 @@
+name: Arthur Fouray Systems render audit
+
+on:
+  push:
+    paths:
+      - scripts/af_render_audit.py
+      - .github/workflows/af_render_audit.yml
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: JSON array of page URLs to audit
+        required: false
+        default: '["https://arthurfouray.systems/","https://arthurfouray.systems/arthur-fouray","https://arthurfouray.systems/rt4a-index"]'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OUTPUT_DIR: ${{ github.workspace }}/af_render_audit
+      PAGES_JSON: ${{ github.event.inputs.pages || '["https://arthurfouray.systems/","https://arthurfouray.systems/arthur-fouray","https://arthurfouray.systems/rt4a-index"]' }}
+      UA: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Capture raw HTML of each audited page
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          python - <<'PY'
+          import json, os, subprocess
+          pages = json.loads(os.environ['PAGES_JSON'])
+          out = os.environ['OUTPUT_DIR']
+          for i, url in enumerate(pages):
+              dest = f'{out}/page_{i:02d}.html'
+              subprocess.run(['curl', '-sSL', '--compressed', '--max-time', '60',
+                              '-A', os.environ['UA'], '-o', dest, url], check=False)
+              print('fetched', url, os.path.getsize(dest) if os.path.exists(dest) else 'FAILED')
+          PY
+
+      - name: Record response headers for the document and its heaviest assets
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess, urllib.parse
+          pages = json.loads(os.environ['PAGES_JSON'])
+          out = os.environ['OUTPUT_DIR']
+          ua = os.environ['UA']
+          lines = []
+
+          def head(url, label):
+              r = subprocess.run(['curl', '-sSI', '-L', '--compressed', '--max-time', '40',
+                                  '-A', ua, url], capture_output=True, text=True)
+              keep = ('HTTP/', 'content-type', 'content-length', 'content-encoding',
+                      'cache-control', 'etag', 'last-modified', 'vary', 'age',
+                      'server', 'cf-cache-status', 'x-cache', 'alt-svc',
+                      'accept-ranges', 'link', 'timing-allow-origin')
+              lines.append(f'--- {label}: {url}')
+              for ln in r.stdout.splitlines():
+                  if ln.strip().lower().startswith(keep) or ln.startswith('HTTP/'):
+                      lines.append('    ' + ln.strip())
+
+          head(pages[0], 'document')
+
+          html = open(f'{out}/page_00.html', errors='replace').read()
+          assets = []
+          for m in re.finditer(r'(?:src|href|data-src|srcset)\s*=\s*["\']([^"\']+)', html, re.I):
+              u = m.group(1).split()[0]
+              if u.startswith('//'):
+                  u = 'https:' + u
+              if not u.startswith('http'):
+                  continue
+              if any(u.lower().split('?')[0].endswith(ext) for ext in
+                     ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif',
+                      '.css', '.js', '.woff', '.woff2', '.ttf', '.otf', '.svg')):
+                  if u not in assets:
+                      assets.append(u)
+          print(f'{len(assets)} candidate asset URLs found in the document')
+          for u in assets[:24]:
+              ext = u.lower().split('?')[0].rsplit('.', 1)[-1]
+              head(u, ext)
+
+          open(f'{out}/headers.txt', 'w').write('\n'.join(lines))
+          PY
+
+      - name: Verify document transfer encoding with a real GET
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          pages = json.loads(os.environ['PAGES_JSON'])
+          ua = os.environ['UA']
+          out = os.environ['OUTPUT_DIR']
+          keep = ('http/', 'content-encoding', 'content-length', 'cache-control',
+                  'vary', 'x-cache', 'transfer-encoding', 'content-type')
+          lines = []
+          for url in pages:
+              # A HEAD request can hide compression, so issue a real GET and
+              # measure the bytes that actually cross the wire.
+              r = subprocess.run(
+                  ['curl', '-sS', '-o', '/dev/null', '-D', '-', '-A', ua,
+                   '-H', 'Accept-Encoding: br, gzip, deflate',
+                   '--max-time', '60', '-w',
+                   'WIRE_BYTES=%{size_download}\\nTIME_TOTAL=%{time_total}\\n', url],
+                  capture_output=True, text=True)
+              lines.append(f'--- GET {url}')
+              for ln in r.stdout.splitlines():
+                  low = ln.strip().lower()
+                  if low.startswith(keep) or ln.startswith(('WIRE_BYTES', 'TIME_TOTAL')):
+                      lines.append('    ' + ln.strip())
+          text = '\n'.join(lines)
+          print(text)
+          open(f'{out}/compression.txt', 'w').write(text)
+          PY
+
+      - name: Run Lighthouse against the home page
+        continue-on-error: true
+        run: |
+          npm install -g lighthouse@12 >/dev/null 2>&1
+          HOME_URL=$(python -c "import json,os;print(json.loads(os.environ['PAGES_JSON'])[0])")
+          # Lighthouse defaults to the mobile form factor, so mobile takes no
+          # preset at all. Passing an empty --preset is rejected outright.
+          for FORM in mobile desktop; do
+            PRESET=""
+            [ "$FORM" = desktop ] && PRESET="--preset=desktop"
+            lighthouse "$HOME_URL" \
+              --quiet \
+              $PRESET \
+              --only-categories=performance \
+              --output=json \
+              --output-path="$OUTPUT_DIR/lighthouse_${FORM}.json" \
+              --chrome-flags="--headless=new --no-sandbox --disable-dev-shm-usage" \
+              --max-wait-for-load=60000 || echo "lighthouse $FORM failed"
+          done
+          ls -la "$OUTPUT_DIR"
+
+      - name: Download the site's own scripts and stylesheets
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, urllib.parse
+          out = os.environ['OUTPUT_DIR']
+          ua = os.environ['UA']
+          os.makedirs(f'{out}/custom', exist_ok=True)
+          html = open(f'{out}/page_00.html', errors='replace').read()
+          # Files under freight.cargo.site are the ones this site uploaded,
+          # as opposed to Cargo's own platform bundle on build.cargo.site.
+          wanted = []
+          for m in re.finditer(
+                  r'(?:src|href)\s*=\s*["\']([^"\']*freight\.cargo\.site[^"\']*)',
+                  html, re.I):
+              u = m.group(1)
+              if u.startswith('//'):
+                  u = 'https:' + u
+              name = urllib.parse.urlparse(u).path.rstrip('/').split('/')[-1]
+              # Keep code, not pictures.
+              if re.search(r'\.(?:jpg|jpeg|png|gif|webp|avif|svg|ico)$', name, re.I):
+                  continue
+              if u not in [w[0] for w in wanted]:
+                  wanted.append((u, name))
+          print(f'{len(wanted)} site-owned code files referenced')
+          for u, name in wanted[:12]:
+              dest = f'{out}/custom/{name}'
+              subprocess.run(['curl', '-sSL', '--compressed', '--max-time', '60',
+                              '-A', ua, '-o', dest, u], check=False)
+              size = os.path.getsize(dest) if os.path.exists(dest) else 0
+              print(f'  {size:>9} bytes  {name}')
+          PY
+
+      - name: Analyse and print the render-path report
+        run: python scripts/af_render_audit.py
+
+      - name: Upload full audit data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: af-render-audit
+          path: af_render_audit/**
+          if-no-files-found: warn
+          retention-days: 7
