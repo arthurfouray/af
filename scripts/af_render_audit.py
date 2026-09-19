@@ -328,6 +328,97 @@ def print_lighthouse(path: Path) -> None:
     print()
 
 
+# --------------------------------------------------------------------------
+# Source trace: why one asset ends up behind several transform URLs
+# --------------------------------------------------------------------------
+FREIGHT = re.compile(
+    r'https://freight\.cargo\.site/(?P<transform>[a-z]/[^"\'\s\\]*?)?'
+    r'(?P<kind>[imt])/(?P<uid>[A-Z0-9]{24,})/(?P<name>[^"\'\s\\?]+)')
+
+
+def trace_transform_variants(url: str, html: str) -> None:
+    """Group every Cargo asset reference in the document by asset id.
+
+    Cargo serves an asset at /<transform>/i/<uid>/<name>. One uid reached
+    through several transforms is the same picture fetched more than once,
+    and for formats Cargo does not resample (animated GIF, SVG) each fetch
+    returns identical bytes. Printing the surrounding markup shows which
+    construct emitted each variant, which is what decides the fix.
+    """
+    by_uid = defaultdict(list)
+    for m in FREIGHT.finditer(html):
+        by_uid[m.group('uid')].append(m)
+
+    multi = {u: ms for u, ms in by_uid.items()
+             if len({m.group(0) for m in ms}) > 1}
+    rule(f'TRANSFORM VARIANTS IN SOURCE  {url}')
+    print(f'  Distinct Cargo assets referenced : {len(by_uid)}')
+    print(f'  Assets referenced at more than one URL: {len(multi)}')
+    if not multi:
+        print('  Every asset is referenced through a single URL.')
+        return
+
+    for uid, ms in sorted(multi.items(), key=lambda kv: -len(kv[1]))[:8]:
+        name = ms[0].group('name')
+        variants = sorted({m.group(0) for m in ms})
+        print(f'\n  {name[:70]}  (asset {uid[:14]}…)')
+        print(f'    {len(variants)} distinct URLs, {len(ms)} references:')
+        for v in variants:
+            print(f'      {v.split("freight.cargo.site/")[-1][:110]}')
+        # Show the markup around the first reference of each distinct URL so
+        # the emitting construct is identifiable.
+        shown = set()
+        for m in ms:
+            if m.group(0) in shown:
+                continue
+            shown.add(m.group(0))
+            lo = max(0, m.start() - 190)
+            hi = min(len(html), m.end() + 90)
+            ctx = re.sub(r'\s+', ' ', html[lo:hi])
+            print(f'    context: …{ctx[:270]}…')
+
+
+def trace_custom_assets(out: Path) -> None:
+    """Report on the site's own scripts and stylesheets, not Cargo's."""
+    files = sorted(out.glob('custom/*'))
+    rule('SITE-OWNED SCRIPTS AND STYLESHEETS')
+    if not files:
+        print('  None were downloaded.')
+        return
+    for f in files:
+        try:
+            body = f.read_text(errors='replace')
+        except Exception as e:
+            print(f'  ! {f.name}: {e}')
+            continue
+        print(f'\n  {f.name}  ({kb(f.stat().st_size)})')
+        hits = defaultdict(int)
+        for pat, label in [
+            (r'freight\.cargo\.site', 'builds freight URLs'),
+            (r'/w/\d+', 'hardcodes a width transform'),
+            (r'/h/\d+', 'hardcodes a height transform'),
+            (r'srcset', 'sets srcset'),
+            (r'loading\s*=|loading\s*:', 'sets loading'),
+            (r'fetchpriority|fetchPriority', 'sets fetchpriority'),
+            (r'IntersectionObserver', 'uses IntersectionObserver'),
+            (r'addEventListener\(\s*[\'"](?:scroll|touchmove|wheel)', 'binds a scroll listener'),
+            (r'passive\s*:', 'passes a passive option'),
+            (r'new Image\(|\.src\s*=', 'assigns image src in script'),
+            (r'content-visibility', 'uses content-visibility'),
+            (r'@media', 'has media queries'),
+            (r'!important', 'uses !important'),
+        ]:
+            n = len(re.findall(pat, body))
+            if n:
+                hits[label] += n
+        for label, n in hits.items():
+            print(f'      {n:>4}x  {label}')
+        widths = Counter(re.findall(r'/w/(\d+)', body))
+        if widths:
+            print(f'      width transforms referenced: '
+                  f'{", ".join(f"{w} ({n}x)" for w, n in widths.most_common(8))}')
+
+
 def main() -> int:
     pages = json.loads(os.environ.get('PAGES_JSON', '[]'))
     rule('AUDIT SCOPE')
@@ -341,12 +432,15 @@ def main() -> int:
             html = html_path.read_text(errors='replace')
             info = analyse_markup(url, html)
             print_markup(info)
+            trace_transform_variants(url, html)
             summary.append(info)
 
     (OUT / 'markup_summary.json').write_text(json.dumps(summary, indent=2))
 
     for lh in sorted(OUT.glob('lighthouse_*.json')):
         print_lighthouse(lh)
+
+    trace_custom_assets(OUT)
 
     hdr = OUT / 'headers.txt'
     if hdr.exists():

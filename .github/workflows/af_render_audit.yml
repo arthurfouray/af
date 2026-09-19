@@ -138,6 +138,38 @@ jobs:
           done
           ls -la "$OUTPUT_DIR"
 
+      - name: Download the site's own scripts and stylesheets
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, urllib.parse
+          out = os.environ['OUTPUT_DIR']
+          ua = os.environ['UA']
+          os.makedirs(f'{out}/custom', exist_ok=True)
+          html = open(f'{out}/page_00.html', errors='replace').read()
+          # Files under freight.cargo.site are the ones this site uploaded,
+          # as opposed to Cargo's own platform bundle on build.cargo.site.
+          wanted = []
+          for m in re.finditer(
+                  r'(?:src|href)\s*=\s*["\']([^"\']*freight\.cargo\.site[^"\']*)',
+                  html, re.I):
+              u = m.group(1)
+              if u.startswith('//'):
+                  u = 'https:' + u
+              name = urllib.parse.urlparse(u).path.rstrip('/').split('/')[-1]
+              # Keep code, not pictures.
+              if re.search(r'\.(?:jpg|jpeg|png|gif|webp|avif|svg|ico)$', name, re.I):
+                  continue
+              if u not in [w[0] for w in wanted]:
+                  wanted.append((u, name))
+          print(f'{len(wanted)} site-owned code files referenced')
+          for u, name in wanted[:12]:
+              dest = f'{out}/custom/{name}'
+              subprocess.run(['curl', '-sSL', '--compressed', '--max-time', '60',
+                              '-A', ua, '-o', dest, u], check=False)
+              size = os.path.getsize(dest) if os.path.exists(dest) else 0
+              print(f'  {size:>9} bytes  {name}')
+          PY
+
       - name: Analyse and print the render-path report
         run: python scripts/af_render_audit.py
 
