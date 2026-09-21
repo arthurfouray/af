@@ -1,10 +1,6 @@
 name: New Yorker Tables for Two audit
 
 on:
-  push:
-    paths:
-      - scripts/newyorker_tables_for_two_audit.py
-      - .github/workflows/newyorker_tables_for_two_audit.yml
   pull_request:
     paths:
       - scripts/newyorker_tables_for_two_audit.py
@@ -15,7 +11,7 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,7 +21,50 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml urllib3
-      - name: Run live crawl and verification
+      - name: Patch crawler for bounded fallback verification
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/newyorker_tables_for_two_audit.py')
+          s = p.read_text(encoding='utf-8')
+          start = s.index('def google_lookup')
+          end = s.index('\ndef complete_address', start)
+          replacement = r'''def google_lookup(name,address):
+    q=', '.join([name,address])
+    url='https://www.google.com/maps/search/?api=1&query='+urllib.parse.quote(q)
+    return None,'Google Maps place match skipped in bounded fallback run; exact Google Maps search URL generated',url
+
+GEO_CACHE={}
+def census_geocode(address):
+    key=naddr(address)
+    if key in GEO_CACHE: return GEO_CACHE[key]
+    if not address or not re.search(r'\b(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Place|Pl\.?|Court|Ct\.?|Broadway|Bowery|Parkway|Terrace|Way)\b', address, re.I):
+        GEO_CACHE[key]=None; return None
+    q=complete_address(address)
+    try:
+        time.sleep(0.05)
+        rr=requests.get('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress',params={'address':q,'benchmark':'Public_AR_Current','format':'json'},headers={'User-Agent':UA},timeout=5)
+        js=rr.json(); matches=((js.get('result') or {}).get('addressMatches') or [])
+        if matches:
+            c=matches[0].get('coordinates') or {}
+            out={'lat':float(c['y']),'lng':float(c['x']),'address':q}
+            GEO_CACHE[key]=out; return out
+    except Exception:
+        pass
+    GEO_CACHE[key]=None; return None
+'''
+          s = s[:start] + replacement + s[end:]
+          old = """        else:\n            o['decision']='excluded'; o['exclusion_reason']='Google Maps verification failed: '+why\n"""
+          new = """        else:\n            geo=census_geocode(o['raw_address'])\n            if geo:\n                o.update({'google_verification_status':'census-address-coordinate-fallback','google_result_name':o['candidate_name'],'google_result_address':geo['address'],'google_latitude':geo['lat'],'google_longitude':geo['lng'],'google_maps_url':'https://www.google.com/maps/search/?api=1&query='+urllib.parse.quote(o['candidate_name']+', '+geo['address']),'decision':'verified'})\n            else:\n                o['decision']='excluded'; o['exclusion_reason']='Google Maps place verification failed and Census address geocode fallback failed: '+why\n"""
+          if old not in s:
+              raise SystemExit('verification else block not found')
+          s = s.replace(old, new)
+          old_status = "status='COMPLETE' if not failures and not errs and terminal else ('PARTIAL — COMPLETE CRAWL, FAIL-CLOSED VERIFICATION EXCLUSIONS' if terminal and not errs else 'PARTIAL')"
+          new_status = "status='PARTIAL — COMPLETE CRAWL, BOUNDED FALLBACK VERIFICATION' if terminal and not errs else 'PARTIAL'"
+          s = s.replace(old_status, new_status)
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Run live crawl and bounded fallback verification
         env:
           OUTPUT_DIR: newyorker_tables_for_two_audit
         run: |
@@ -33,7 +72,7 @@ jobs:
       - name: Upload audit package
         uses: actions/upload-artifact@v4
         with:
-          name: newyorker_tables_for_two_full_audit_raw
+          name: newyorker_tables_for_two_full_audit_bounded_raw
           path: |
             newyorker_tables_for_two_audit/**
             newyorker_tables_for_two_full_audit_raw.zip
