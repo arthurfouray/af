@@ -6,15 +6,20 @@
 //         (Cargo escapes it as JSON with < written <). The bundle is served from its would-be
 //         Freight URL after `ms` of delay, with CORS and the SRI the stub pins.
 //   B404  (systems only) the bundle request fails: what a visitor sees if Freight does not answer.
-// usage: node run.cjs chromium|webkit desktop|mobile OUTDIR
+// Then A, B0 and B@0 on direct loads of other routes (ROUTES) and after an in-site navigation from the
+// homepage (NAV: click the link, Cargo's router swaps the page without reloading), in systems and html.
+// usage: BUILD=DIR node run.cjs chromium|webkit desktop|mobile OUTDIR
+//   DIR holds live-custom-html.html (the <customhtml> body of the page as served now) and what
+//   externalize.py built from it: Custom-HTML.stub.html and afs-custom-html.<sha16>.js.
 // env: MODES (default systems,clean,clean-dark,html,img,card), DELAYS (0,300,1500), SETTLE_MS (10000),
-//      REPS (4: timing repetitions of B0 and B@0 in systems and html)
+//      REPS (4: timing repetitions of B0 and B@0 in systems and html), ROUTES (before-arts,curriculum-vitae,chronology),
+//      NAV (before-arts: the homepage link to click; empty to skip)
 const pw = require('playwright');
 const fs = require('fs'), path = require('path'), zlib = require('zlib'), crypto = require('crypto');
 const { PNG } = require('pngjs');
 const pixelmatch = require('pixelmatch');
 const [browserName, profile, outdir] = process.argv.slice(2);
-const here = __dirname;
+const here = process.env.BUILD || __dirname;
 const liveCh = fs.readFileSync(path.join(here, 'live-custom-html.html'), 'utf8');
 const stub = fs.readFileSync(path.join(here, 'Custom-HTML.stub.html'), 'utf8');
 const bundleName = fs.readdirSync(here).find(f => /^afs-custom-html\.[0-9a-f]{16}\.js$/.test(f));
@@ -27,6 +32,8 @@ const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const MODES = (process.env.MODES || 'systems,clean,clean-dark,html,img,card').split(',');
 const DELAYS = (process.env.DELAYS || '0,300,1500').split(',').map(Number);
 const SETTLE = +(process.env.SETTLE_MS || 10000), REPS = +(process.env.REPS || 4);
+const ROUTES = (process.env.ROUTES ?? 'before-arts,curriculum-vitae,chronology').split(',').filter(Boolean);
+const NAV = process.env.NAV ?? 'before-arts';
 const IDS7 = ['afs-mode-root-initializer', 'afs-mode-css-controller-loader', 'afs-runtime-loader', 'afs-heavy-page-loader',
   'afs-persisted-mode-replay', 'afs-html-footer-index', 'afs-section-menu-js'];
 const UA = { chromium: 'Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
@@ -72,19 +79,23 @@ const STATE = IDS7 => {
   };
 };
 
-async function run(browser, mode, variant, delay, tag) {
+async function run(browser, mode, variant, delay, group, opts = {}) {
+  const tag = `${group}-${variant}${variant === 'B' ? '@' + delay : ''}${opts.rep === undefined ? '' : '-' + opts.rep}`;
   const dir = path.join(outdir, tag); fs.mkdirSync(dir, { recursive: true });
   const ctx = await browser.newContext({ ...profiles[profile], colorScheme: 'light' });
   if (mode === 'clean-dark') await ctx.addInitScript(() => { try { localStorage.setItem('afs-clean-theme-v1', 'dark'); } catch {} });
   await ctx.addInitScript(MARKS);
-  const rec = { browser: browserName, profile, mode, variant, delay, html: [], bundleRequests: 0, routeError: null };
+  const rec = { browser: browserName, profile, mode, variant, delay, group, tag, route: opts.route || "", navTo: opts.nav || null,
+    html: [], bundleRequests: 0, routeError: null };
   if (variant !== 'A') {
-    await ctx.route(/^https:\/\/arthurfouray\.systems\/(\?.*)?$/, async route => {
-      const r = await route.fetch();
+    await ctx.route(/^https:\/\/arthurfouray\.systems\/[a-z0-9-]*(\?.*)?$/, async route => {
+      let r, lastErr;
+      for (let i = 0; i < 4 && !r; i++) r = await route.fetch().catch(e => { lastErr = e; return null; });
+      if (!r) { rec.routeError = 'route.fetch failed 4x: ' + String(lastErr).slice(0, 120); return route.abort().catch(() => {}); }
       let h = await r.text();
       const n1 = count(h, liveCh), n2 = count(h, liveEsc);
       const before = Buffer.byteLength(h);
-      if (n1 !== 1 || n2 !== 1) rec.routeError = `published Custom HTML found ${n1}x in <customhtml> and ${n2}x in the state; the site changed since R13`;
+      if (n1 !== 1 || n2 !== 1) rec.routeError = `published Custom HTML found ${n1}x in <customhtml> and ${n2}x in the state; the site changed since the build`;
       else if (variant !== 'B0') h = h.replace(liveCh, () => stub).replace(liveEsc, () => stubEsc);
       const b = Buffer.from(h);
       rec.html.push({ url: route.request().url(), before, after: b.length,
@@ -106,11 +117,19 @@ async function run(browser, mode, variant, delay, tag) {
   page.on('pageerror', e => errors.push('pageerror ' + String(e).slice(0, 300)));
   page.on('requestfailed', q => { const f = q.failure() && q.failure().errorText || ''; if (!/aborted|cancel/i.test(f)) errors.push(`requestfailed ${f} ${q.url().slice(0, 160)}`); });
   const m = mode === 'clean-dark' ? 'clean' : mode;
-  const url = 'https://arthurfouray.systems/' + (m === 'systems' ? '' : '?mode=' + m);
+  const url = 'https://arthurfouray.systems/' + (opts.route || '') + (m === 'systems' ? '' : '?mode=' + m);
   const t = Date.now();
   await page.goto(url, { waitUntil: 'load', timeout: 120000 }).catch(e => errors.push('goto ' + e.message));
   rec.loadWallMs = Date.now() - t;
   await page.waitForTimeout(SETTLE);
+  if (opts.nav) {
+    const ok = await page.evaluate(h => { const a = document.querySelector(`a[href="${h}"]`); if (!a) return false; a.click(); return true; }, opts.nav)
+      .catch(e => { errors.push('nav ' + e.message); return false; });
+    if (!ok) errors.push(`nav: no a[href="${opts.nav}"]`);
+    else await page.waitForFunction(h => location.pathname === '/' + h, opts.nav, { timeout: 30000 }).catch(e => errors.push('nav wait ' + e.message.slice(0, 120)));
+    await page.waitForTimeout(SETTLE);
+    rec.navPath = await page.evaluate(() => location.pathname).catch(() => null);
+  }
   const st = await page.evaluate(STATE, IDS7).catch(e => ({ evalError: String(e) }));
   const text = st.text || ''; delete st.text;
   Object.assign(rec, st, { textSha: sha(text), textLen: text.length, errors });
@@ -136,32 +155,37 @@ function pxdiff(a, b) {
   const out = [];
   for (const mode of MODES) {
     const variants = [['A', 0], ['B0', 0], ...DELAYS.map(d => ['B', d]), ...(mode === 'systems' ? [['B404', 0]] : [])];
-    for (const [v, d] of variants) out.push(await run(browser, mode, v, d, `${mode}-${v}${v === 'B' ? '@' + d : ''}`));
+    for (const [v, d] of variants) out.push(await run(browser, mode, v, d, mode));
   }
+  const V3 = [['A', 0], ['B0', 0], ['B', 0]];
+  for (const route of ROUTES) for (const mode of ['systems', 'html']) for (const [v, d] of V3)
+    out.push(await run(browser, mode, v, d, `route-${route}-${mode}`, { route }));
+  if (NAV) for (const mode of ['systems', 'html']) for (const [v, d] of V3)
+    out.push(await run(browser, mode, v, d, `nav-${NAV}-${mode}`, { nav: NAV }));
   const timing = [];
   for (const mode of ['systems', 'html']) for (let i = 0; i < REPS; i++) for (const [v, d] of [['B0', 0], ['B', 0]])
-    timing.push(await run(browser, mode, v, d, `timing/${mode}-${v}${v === 'B' ? '@0' : ''}-${i}`));
+    timing.push(await run(browser, mode, v, d, `timing/${mode}`, { rep: i }));
   await browser.close();
 
-  // Compare every B run with A and B0 of the same mode.
+  // Compare every run with A and B0 of the same group (mode, route or navigation).
   const rows = [];
   const strip = o => (o || []).filter(x => x !== 'script#afs-custom-html-bundle');
-  for (const mode of MODES) {
-    const A = out.find(r => r.mode === mode && r.variant === 'A'), B0 = out.find(r => r.mode === mode && r.variant === 'B0');
-    for (const r of out.filter(r => r.mode === mode)) {
-      const tag = `${mode}-${r.variant}${r.variant === 'B' ? '@' + r.delay : ''}`;
+  for (const group of [...new Set(out.map(r => r.group))]) {
+    const A = out.find(r => r.group === group && r.variant === 'A');
+    for (const r of out.filter(r => r.group === group)) {
+      const tag = r.tag;
       const sheetsEq = JSON.stringify(r.sheets) === JSON.stringify(A.sheets);
       const orderEq = JSON.stringify(strip(r.order)) === JSON.stringify(strip(A.order));
       const dataKeys = ['afsMode', 'afsCssState', 'afsManifestSource', 'afsHtmlV1Preparse', 'afsHtmlV1Projected', 'afsTk'];
       const dataDiff = dataKeys.filter(k => (r.data || {})[k] !== (A.data || {})[k]).map(k => `${k}:${(A.data || {})[k]}→${(r.data || {})[k]}`);
       const tagDiff = Object.keys({ ...A.tags, ...r.tags }).filter(k => (A.tags || {})[k] !== (r.tags || {})[k] && k !== 'script')
         .map(k => `${k}:${(A.tags || {})[k] || 0}→${(r.tags || {})[k] || 0}`);
-      rows.push({ tag, errors: r.errors.length, errorSample: r.errors.slice(0, 3), routeError: r.routeError,
+      rows.push({ tag, variant: r.variant, errors: r.errors.length, errorSample: r.errors.slice(0, 3), routeError: r.routeError,
         ids7ok: IDS7.every(id => (r.ids7 || {})[id] === 1), duplicateScriptIds: r.duplicateScriptIds, api: r.api, bundleRequests: r.bundleRequests,
         dataDiff, sheetsEq, orderEq, orderB: r.variant === 'A' ? undefined : (orderEq ? undefined : strip(r.order)), jsonld: r.jsonld,
         textEqA: r.textSha === A.textSha, textLen: r.textLen, tagDiff: tagDiff.slice(0, 12), nodes: r.nodes, nodesA: A.nodes,
-        pxVsA: r.variant === 'A' ? 0 : pxdiff(path.join(outdir, `${mode}-A`, 'shot.png'), path.join(outdir, tag, 'shot.png')),
-        pxVsB0: r.variant.startsWith('B') && r.variant !== 'B0' ? pxdiff(path.join(outdir, `${mode}-B0`, 'shot.png'), path.join(outdir, tag, 'shot.png')) : undefined,
+        navPath: r.navPath, pxVsA: r.variant === 'A' ? 0 : pxdiff(path.join(outdir, `${group}-A`, 'shot.png'), path.join(outdir, tag, 'shot.png')),
+        pxVsB0: r.variant.startsWith('B') && r.variant !== 'B0' ? pxdiff(path.join(outdir, `${group}-B0`, 'shot.png'), path.join(outdir, tag, 'shot.png')) : undefined,
         html: r.html, fcp: r.paint && r.paint['first-contentful-paint'], marks: r.marks, nav: r.nav });
     }
   }
@@ -179,7 +203,7 @@ function pxdiff(a, b) {
   }
   const summary = { browser: browserName, profile, bundle: { name: bundleName, bytes: bundle.length, url: bundleUrl }, stubBytes: Buffer.byteLength(stub), rows, timing: tsum };
   fs.writeFileSync(path.join(outdir, 'summary.json'), JSON.stringify(summary, null, 1));
-  const bad = rows.filter(r => r.tag.includes('-B') && !r.tag.includes('B404') && (r.errors || r.routeError || !r.ids7ok || r.duplicateScriptIds.length || r.dataDiff.length || !r.sheetsEq || !r.orderEq));
+  const bad = rows.filter(r => r.variant.startsWith('B') && r.variant !== 'B404' && (r.errors || r.routeError || !r.ids7ok || r.duplicateScriptIds.length || r.dataDiff.length || !r.sheetsEq || !r.orderEq));
   console.log(`rows ${rows.length}, flagged ${bad.length}: ${bad.map(r => r.tag).join(' ')}`);
   console.table(tsum);
 })();

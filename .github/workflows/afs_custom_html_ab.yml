@@ -1,7 +1,8 @@
 name: Arthur Fouray Systems Custom HTML externalisation A/B
 
 # A = published homepage, B0 = routed unchanged (control), B = the Custom HTML replaced by the
-# stub and the bundle served from its would-be Freight URL. Read-only against the public site;
+# stub and the bundle served from its would-be Freight URL. Both are built in the job from the
+# Custom HTML the site serves at that moment (extract.py, externalize.py). Read-only against the public site;
 # nothing is uploaded to Cargo. See scripts/afs_custom_html_ab/run.cjs.
 on:
   push:
@@ -52,15 +53,15 @@ jobs:
           curl -sS -A "$UA" -H 'Accept-Encoding: br, gzip' -D "$OUT/home.headers" -o "$OUT/home.enc" https://arthurfouray.systems/
           curl -sS -A "$UA" --compressed -o "$OUT/home.html" https://arthurfouray.systems/
           ls -l "$OUT"/home.*; grep -i -E '^(content-encoding|content-length|cache-control|cf-cache-status|server):' "$OUT/home.headers" || true
-          python3 - "$OUT/home.html" scripts/afs_custom_html_ab/live-custom-html.html <<'PY'
-          import sys, hashlib
-          h = open(sys.argv[1], encoding='utf-8').read(); c = open(sys.argv[2], encoding='utf-8').read()
-          print('R13 Custom HTML in the served page:', h.count(c), 'x; sha256', hashlib.sha256(c.encode()).hexdigest()[:16])
-          PY
+          # build from what is published now, so a release after this commit does not invalidate the run
+          mkdir -p "$OUT/build"
+          python3 scripts/afs_custom_html_ab/extract.py "$OUT/home.html" "$OUT/build/live-custom-html.html"
+          python3 scripts/afs_custom_html_ab/externalize.py "$OUT/build/live-custom-html.html" "$OUT/build"
+          python3 scripts/afs_custom_html_ab/externalize.py "$OUT/build/live-custom-html.html" "$OUT/build-option-b" --move-jsonld
 
       - name: Run A/B
         working-directory: scripts/afs_custom_html_ab
-        run: node run.cjs ${{ matrix.browser }} ${{ matrix.profile }} "$OUT"
+        run: BUILD="$OUT/build" node run.cjs ${{ matrix.browser }} ${{ matrix.profile }} "$OUT"
 
       - uses: actions/upload-artifact@v4
         if: always()
