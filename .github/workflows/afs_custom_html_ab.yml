@@ -15,6 +15,26 @@ on:
         description: Timing repetitions of B0 and B@0 (systems and html)
         required: false
         default: '4'
+      modes:
+        description: Homepage modes (comma list, "none" to skip; empty = all six)
+        required: false
+        default: ''
+      routes:
+        description: Routes loaded directly (comma list, "none" to skip; empty = before-arts,curriculum-vitae,chronology)
+        required: false
+        default: ''
+      route_modes:
+        description: Modes for the route groups (empty = systems,html)
+        required: false
+        default: ''
+      route_reps:
+        description: How many times each route group runs
+        required: false
+        default: '1'
+      nav:
+        description: Homepage link to click for the navigation group ("none" to skip; empty = before-arts)
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -31,6 +51,11 @@ jobs:
     env:
       OUT: ${{ github.workspace }}/out/${{ matrix.browser }}-${{ matrix.profile }}
       REPS: ${{ github.event.inputs.reps || '4' }}
+      MODES: ${{ github.event.inputs.modes }}
+      ROUTES: ${{ github.event.inputs.routes }}
+      ROUTE_MODES: ${{ github.event.inputs.route_modes }}
+      ROUTE_REPS: ${{ github.event.inputs.route_reps || '1' }}
+      NAV: ${{ github.event.inputs.nav }}
     steps:
       - uses: actions/checkout@v4
 

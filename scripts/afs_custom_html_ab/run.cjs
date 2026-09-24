@@ -14,9 +14,10 @@
 //   Every run records the Custom HTML the site actually served. If the site is republished during the job,
 //   the build is redone from the new page (externalize.py, next to this file) and the whole group is run again,
 //   so A and B in one group always come from the same release.
-// env: MODES (default systems,clean,clean-dark,html,img,card), DELAYS (0,300,1500), SETTLE_MS (10000),
+// env (unset or empty = the default, "none" = skip): MODES (default systems,clean,clean-dark,html,img,card), DELAYS (0,300,1500), SETTLE_MS (10000),
 //      REPS (4: timing repetitions of B0 and B@0 in systems and html), ROUTES (before-arts,curriculum-vitae,chronology),
-//      NAV (before-arts: the homepage link to click; empty to skip)
+//      NAV (before-arts: the homepage link to click), ROUTE_MODES (systems,html),
+//      ROUTE_REPS (1: how many times each route group runs; repeats are tagged -r1, -r2, ...)
 const pw = require('playwright');
 const fs = require('fs'), path = require('path'), zlib = require('zlib'), crypto = require('crypto');
 const { PNG } = require('pngjs');
@@ -48,11 +49,14 @@ function rebuild(ch) {
   load(dir);
 }
 load(process.env.BUILD || __dirname);
-const MODES = (process.env.MODES || 'systems,clean,clean-dark,html,img,card').split(',');
+// an unset or empty variable takes the default; "none" skips that part
+const list = (v, d) => (v || d).split(',').filter(x => x && x !== 'none');
+const MODES = list(process.env.MODES, 'systems,clean,clean-dark,html,img,card');
 const DELAYS = (process.env.DELAYS || '0,300,1500').split(',').map(Number);
 const SETTLE = +(process.env.SETTLE_MS || 10000), REPS = +(process.env.REPS || 4);
-const ROUTES = (process.env.ROUTES ?? 'before-arts,curriculum-vitae,chronology').split(',').filter(Boolean);
-const NAV = process.env.NAV ?? 'before-arts';
+const ROUTES = list(process.env.ROUTES, 'before-arts,curriculum-vitae,chronology');
+const NAV = list(process.env.NAV, 'before-arts')[0];
+const ROUTE_MODES = list(process.env.ROUTE_MODES, 'systems,html'), ROUTE_REPS = +(process.env.ROUTE_REPS || 1);
 const IDS7 = ['afs-mode-root-initializer', 'afs-mode-css-controller-loader', 'afs-runtime-loader', 'afs-heavy-page-loader',
   'afs-persisted-mode-replay', 'afs-html-footer-index', 'afs-section-menu-js'];
 const UA = { chromium: 'Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
@@ -198,8 +202,8 @@ function pxdiff(a, b) {
     await group(variants.map(([v, d]) => [mode, v, d, mode]), out);
   }
   const V3 = [['A', 0], ['B0', 0], ['B', 0]];
-  for (const route of ROUTES) for (const mode of ['systems', 'html'])
-    await group(V3.map(([v, d]) => [mode, v, d, `route-${route}-${mode}`, { route }]), out);
+  for (const route of ROUTES) for (const mode of ROUTE_MODES) for (let k = 0; k < ROUTE_REPS; k++)
+    await group(V3.map(([v, d]) => [mode, v, d, `route-${route}-${mode}${k ? '-r' + k : ''}`, { route }]), out);
   if (NAV) for (const mode of ['systems', 'html'])
     await group(V3.map(([v, d]) => [mode, v, d, `nav-${NAV}-${mode}`, { nav: NAV }]), out);
   for (const mode of ['systems', 'html']) for (let i = 0; i < REPS; i++)
@@ -208,6 +212,7 @@ function pxdiff(a, b) {
 
   // Compare every run with A and B0 of the same group (mode, route or navigation).
   const rows = [];
+  const siteErrors = new Set(out.filter(r => r.variant === 'A').flatMap(r => r.errors));
   const strip = o => (o || []).filter(x => x !== 'script#afs-custom-html-bundle');
   for (const group of [...new Set(out.map(r => r.group))]) {
     const A = out.find(r => r.group === group && r.variant === 'A');
@@ -220,7 +225,7 @@ function pxdiff(a, b) {
       const dataDiff = dataKeys.filter(k => (r.data || {})[k] !== (A.data || {})[k]).map(k => `${k}:${(A.data || {})[k]}→${(r.data || {})[k]}`);
       const tagDiff = Object.keys({ ...A.tags, ...r.tags }).filter(k => (A.tags || {})[k] !== (r.tags || {})[k] && k !== 'script')
         .map(k => `${k}:${(A.tags || {})[k] || 0}→${(r.tags || {})[k] || 0}`);
-      const extraErrors = r.errors.filter(e => !A.errors.includes(e));
+      const extraErrors = r.errors.filter(e => !A.errors.includes(e) && !siteErrors.has(e));
       rows.push({ tag, variant: r.variant, errors: r.errors.length, extraErrors, errorSample: r.errors.slice(0, 3), routeError: r.routeError,
         servedChSha: r.servedChSha, buildSha: r.buildSha, sameRelease: r.servedChSha && A.servedChSha ? r.servedChSha === A.servedChSha && r.servedChSha === r.buildSha : null,
         ids7ok: IDS7.every(id => (r.ids7 || {})[id] === 1), duplicateScriptIds: r.duplicateScriptIds, api: r.api, bundleRequests: r.bundleRequests,
