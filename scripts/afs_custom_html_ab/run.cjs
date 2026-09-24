@@ -64,10 +64,11 @@ const profiles = { desktop: { viewport: { width: 1350, height: 940 }, deviceScal
 // body opacity cleared, first paint entries.
 const MARKS = () => {
   const m = window.__afsAB = { attrs: {}, bodyVisible: null };
-  const root = document.documentElement;
-  const log = () => { for (const a of ['data-afs-mode', 'data-afs-css-state', 'data-afs-html-v1-preparse', 'data-afs-tk']) {
+  const A = ['data-afs-mode', 'data-afs-css-state', 'data-afs-html-v1-preparse', 'data-afs-tk'];
+  // documentElement can still be null when an init script runs, so observe the document itself.
+  const log = () => { const root = document.documentElement; if (!root) return; for (const a of A) {
     const v = root.getAttribute(a), k = a + '=' + v; if (v !== null && !(k in m.attrs)) m.attrs[k] = Math.round(performance.now()); } };
-  new MutationObserver(log).observe(root, { attributes: true }); log();
+  new MutationObserver(log).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: A }); log();
   // Cargo serves <body style="opacity: 0;"> and clears it once its module has booted.
   const tick = () => { const b = document.body; if (b && b.style.opacity !== '0') { m.bodyVisible = Math.round(performance.now()); return; } requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
@@ -158,6 +159,7 @@ async function run(browser, mode, variant, delay, group, opts = {}) {
   const st = await page.evaluate(STATE, IDS7).catch(e => ({ evalError: String(e) }));
   const text = st.text || ''; delete st.text;
   Object.assign(rec, st, { textSha: sha(text), textLen: text.length, errors });
+  fs.writeFileSync(path.join(dir, 'text.txt'), text);
   await page.screenshot({ path: path.join(dir, 'shot.png') }).catch(e => errors.push('shot ' + e.message));
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ ...rec, servedCh: undefined }, null, 1));
   await ctx.close();
@@ -209,6 +211,7 @@ function pxdiff(a, b) {
   const strip = o => (o || []).filter(x => x !== 'script#afs-custom-html-bundle');
   for (const group of [...new Set(out.map(r => r.group))]) {
     const A = out.find(r => r.group === group && r.variant === 'A');
+    const B0 = out.find(r => r.group === group && r.variant === 'B0') || {};
     for (const r of out.filter(r => r.group === group)) {
       const tag = r.tag;
       const sheetsEq = JSON.stringify(r.sheets) === JSON.stringify(A.sheets);
@@ -222,7 +225,8 @@ function pxdiff(a, b) {
         servedChSha: r.servedChSha, buildSha: r.buildSha, sameRelease: r.servedChSha && A.servedChSha ? r.servedChSha === A.servedChSha && r.servedChSha === r.buildSha : null,
         ids7ok: IDS7.every(id => (r.ids7 || {})[id] === 1), duplicateScriptIds: r.duplicateScriptIds, api: r.api, bundleRequests: r.bundleRequests,
         dataDiff, sheetsEq, orderEq, orderB: r.variant === 'A' ? undefined : (orderEq ? undefined : strip(r.order)), jsonld: r.jsonld,
-        textEqA: r.textSha === A.textSha, textLen: r.textLen, tagDiff: tagDiff.slice(0, 12), nodes: r.nodes, nodesA: A.nodes,
+        textEqA: r.textSha === A.textSha, textEqB0: r.variant === 'A' || r.variant === 'B0' ? undefined : r.textSha === B0.textSha,
+        textLen: r.textLen, nodesB0: B0.nodes, tagDiff: tagDiff.slice(0, 12), nodes: r.nodes, nodesA: A.nodes,
         navPath: r.navPath, pxVsA: r.variant === 'A' ? 0 : pxdiff(path.join(outdir, `${group}-A`, 'shot.png'), path.join(outdir, tag, 'shot.png')),
         pxVsB0: r.variant.startsWith('B') && r.variant !== 'B0' ? pxdiff(path.join(outdir, `${group}-B0`, 'shot.png'), path.join(outdir, tag, 'shot.png')) : undefined,
         html: r.html, fcp: r.paint && r.paint['first-contentful-paint'], marks: r.marks, nav: r.nav });
