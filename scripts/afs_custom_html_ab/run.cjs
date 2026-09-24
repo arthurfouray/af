@@ -11,6 +11,9 @@
 // usage: BUILD=DIR node run.cjs chromium|webkit desktop|mobile OUTDIR
 //   DIR holds live-custom-html.html (the <customhtml> body of the page as served now) and what
 //   externalize.py built from it: Custom-HTML.stub.html and afs-custom-html.<sha16>.js.
+//   Every run records the Custom HTML the site actually served. If the site is republished during the job,
+//   the build is redone from the new page (externalize.py, next to this file) and the whole group is run again,
+//   so A and B in one group always come from the same release.
 // env: MODES (default systems,clean,clean-dark,html,img,card), DELAYS (0,300,1500), SETTLE_MS (10000),
 //      REPS (4: timing repetitions of B0 and B@0 in systems and html), ROUTES (before-arts,curriculum-vitae,chronology),
 //      NAV (before-arts: the homepage link to click; empty to skip)
@@ -19,16 +22,32 @@ const fs = require('fs'), path = require('path'), zlib = require('zlib'), crypto
 const { PNG } = require('pngjs');
 const pixelmatch = require('pixelmatch');
 const [browserName, profile, outdir] = process.argv.slice(2);
-const here = process.env.BUILD || __dirname;
-const liveCh = fs.readFileSync(path.join(here, 'live-custom-html.html'), 'utf8');
-const stub = fs.readFileSync(path.join(here, 'Custom-HTML.stub.html'), 'utf8');
-const bundleName = fs.readdirSync(here).find(f => /^afs-custom-html\.[0-9a-f]{16}\.js$/.test(f));
-const bundle = fs.readFileSync(path.join(here, bundleName));
-const bundleUrl = /id="afs-custom-html-bundle" src="([^"]+)"/.exec(stub)[1];
+const { execFileSync } = require('child_process');
 const esc = s => JSON.stringify(s).slice(1, -1).replace(/</g, '\\u003c');
-const liveEsc = esc(liveCh), stubEsc = esc(stub);
 const count = (h, n) => h.split(n).length - 1;
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+const CH = /<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/;
+let liveCh, stub, bundleName, bundle, bundleUrl, liveEsc, stubEsc, liveSha;
+const builds = [];
+function load(dir) {
+  liveCh = fs.readFileSync(path.join(dir, 'live-custom-html.html'), 'utf8');
+  stub = fs.readFileSync(path.join(dir, 'Custom-HTML.stub.html'), 'utf8');
+  bundleName = fs.readdirSync(dir).find(f => /^afs-custom-html\.[0-9a-f]{16}\.js$/.test(f));
+  bundle = fs.readFileSync(path.join(dir, bundleName));
+  bundleUrl = /id="afs-custom-html-bundle" src="([^"]+)"/.exec(stub)[1];
+  liveEsc = esc(liveCh); stubEsc = esc(stub); liveSha = sha(liveCh);
+  builds.push({ dir: path.basename(dir), customHtmlSha256: liveSha, customHtmlBytes: Buffer.byteLength(liveCh),
+    stubBytes: Buffer.byteLength(stub), bundle: bundleName, at: new Date().toISOString() });
+  console.log('build', JSON.stringify(builds[builds.length - 1]));
+}
+function rebuild(ch) {
+  const dir = path.join(outdir, 'build-' + builds.length);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'live-custom-html.html'), ch);
+  execFileSync('python3', [path.join(__dirname, 'externalize.py'), path.join(dir, 'live-custom-html.html'), dir], { stdio: 'inherit' });
+  load(dir);
+}
+load(process.env.BUILD || __dirname);
 const MODES = (process.env.MODES || 'systems,clean,clean-dark,html,img,card').split(',');
 const DELAYS = (process.env.DELAYS || '0,300,1500').split(',').map(Number);
 const SETTLE = +(process.env.SETTLE_MS || 10000), REPS = +(process.env.REPS || 4);
@@ -86,13 +105,15 @@ async function run(browser, mode, variant, delay, group, opts = {}) {
   if (mode === 'clean-dark') await ctx.addInitScript(() => { try { localStorage.setItem('afs-clean-theme-v1', 'dark'); } catch {} });
   await ctx.addInitScript(MARKS);
   const rec = { browser: browserName, profile, mode, variant, delay, group, tag, route: opts.route || "", navTo: opts.nav || null,
-    html: [], bundleRequests: 0, routeError: null };
+    html: [], bundleRequests: 0, routeError: null, servedChSha: null, servedCh: null };
+  const served = h => { const m = CH.exec(h); if (m && !rec.servedChSha) { rec.servedChSha = sha(m[1]); if (rec.servedChSha !== liveSha) rec.servedCh = m[1]; } };
   if (variant !== 'A') {
     await ctx.route(/^https:\/\/arthurfouray\.systems\/[a-z0-9-]*(\?.*)?$/, async route => {
       let r, lastErr;
       for (let i = 0; i < 4 && !r; i++) r = await route.fetch().catch(e => { lastErr = e; return null; });
       if (!r) { rec.routeError = 'route.fetch failed 4x: ' + String(lastErr).slice(0, 120); return route.abort().catch(() => {}); }
       let h = await r.text();
+      if (route.request().isNavigationRequest()) served(h);
       const n1 = count(h, liveCh), n2 = count(h, liveEsc);
       const before = Buffer.byteLength(h);
       if (n1 !== 1 || n2 !== 1) rec.routeError = `published Custom HTML found ${n1}x in <customhtml> and ${n2}x in the state; the site changed since the build`;
@@ -112,9 +133,12 @@ async function run(browser, mode, variant, delay, group, opts = {}) {
     });
   }
   const page = await ctx.newPage();
+  if (variant === 'A') page.on('response', resp => { const q = resp.request();
+    if (q.isNavigationRequest() && q.frame() === page.mainFrame() && /^https:\/\/arthurfouray\.systems\//.test(q.url()))
+      rec.pending = resp.text().then(served).catch(() => {}); });
   const errors = [];
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 300)); });
-  page.on('pageerror', e => errors.push('pageerror ' + String(e).slice(0, 300)));
+  page.on('pageerror', e => errors.push('pageerror ' + String(e).slice(0, 200) + ' @ ' + String(e.stack || '').split('\n').slice(1, 3).map(x => x.trim()).join(' < ').slice(0, 300)));
   page.on('requestfailed', q => { const f = q.failure() && q.failure().errorText || ''; if (!/aborted|cancel/i.test(f)) errors.push(`requestfailed ${f} ${q.url().slice(0, 160)}`); });
   const m = mode === 'clean-dark' ? 'clean' : mode;
   const url = 'https://arthurfouray.systems/' + (opts.route || '') + (m === 'systems' ? '' : '?mode=' + m);
@@ -130,14 +154,15 @@ async function run(browser, mode, variant, delay, group, opts = {}) {
     await page.waitForTimeout(SETTLE);
     rec.navPath = await page.evaluate(() => location.pathname).catch(() => null);
   }
+  await rec.pending; delete rec.pending;
   const st = await page.evaluate(STATE, IDS7).catch(e => ({ evalError: String(e) }));
   const text = st.text || ''; delete st.text;
   Object.assign(rec, st, { textSha: sha(text), textLen: text.length, errors });
   await page.screenshot({ path: path.join(dir, 'shot.png') }).catch(e => errors.push('shot ' + e.message));
-  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(rec, null, 1));
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ ...rec, servedCh: undefined }, null, 1));
   await ctx.close();
   console.log(JSON.stringify({ tag, errors: errors.length, mode: rec.data && rec.data.afsMode, css: rec.data && rec.data.afsCssState,
-    preparse: rec.data && rec.data.afsHtmlV1Preparse, api: rec.api, routeError: rec.routeError }));
+    preparse: rec.data && rec.data.afsHtmlV1Preparse, api: rec.api, routeError: rec.routeError, served: (rec.servedChSha || '').slice(0, 12) }));
   return rec;
 }
 
@@ -152,19 +177,31 @@ function pxdiff(a, b) {
 (async () => {
   fs.mkdirSync(outdir, { recursive: true });
   const browser = await pw[browserName].launch(browserName === 'chromium' ? { args: ['--autoplay-policy=no-user-gesture-required'] } : {});
-  const out = [];
+  const out = [], timing = [], reruns = [];
+  // Run a set of runs that are compared with each other; if any served a different Custom HTML than the build,
+  // rebuild from what was served and run the whole set again (at most twice).
+  const group = async (specs, into) => {
+    for (let attempt = 0; ; attempt++) {
+      const got = [];
+      for (const [mode, v, d, g, o] of specs) got.push(await run(browser, mode, v, d, g, o));
+      const stale = got.find(r => r.servedChSha && r.servedChSha !== liveSha);
+      if (!stale || attempt === 2) { got.forEach(r => { r.buildSha = liveSha; delete r.servedCh; }); into.push(...got); return; }
+      reruns.push({ group: specs[0][3], servedChSha: stale.servedChSha, buildSha: liveSha, at: new Date().toISOString() });
+      console.log('site changed during the job, rebuilding:', JSON.stringify(reruns[reruns.length - 1]));
+      if (stale.servedCh) rebuild(stale.servedCh);
+    }
+  };
   for (const mode of MODES) {
     const variants = [['A', 0], ['B0', 0], ...DELAYS.map(d => ['B', d]), ...(mode === 'systems' ? [['B404', 0]] : [])];
-    for (const [v, d] of variants) out.push(await run(browser, mode, v, d, mode));
+    await group(variants.map(([v, d]) => [mode, v, d, mode]), out);
   }
   const V3 = [['A', 0], ['B0', 0], ['B', 0]];
-  for (const route of ROUTES) for (const mode of ['systems', 'html']) for (const [v, d] of V3)
-    out.push(await run(browser, mode, v, d, `route-${route}-${mode}`, { route }));
-  if (NAV) for (const mode of ['systems', 'html']) for (const [v, d] of V3)
-    out.push(await run(browser, mode, v, d, `nav-${NAV}-${mode}`, { nav: NAV }));
-  const timing = [];
-  for (const mode of ['systems', 'html']) for (let i = 0; i < REPS; i++) for (const [v, d] of [['B0', 0], ['B', 0]])
-    timing.push(await run(browser, mode, v, d, `timing/${mode}`, { rep: i }));
+  for (const route of ROUTES) for (const mode of ['systems', 'html'])
+    await group(V3.map(([v, d]) => [mode, v, d, `route-${route}-${mode}`, { route }]), out);
+  if (NAV) for (const mode of ['systems', 'html'])
+    await group(V3.map(([v, d]) => [mode, v, d, `nav-${NAV}-${mode}`, { nav: NAV }]), out);
+  for (const mode of ['systems', 'html']) for (let i = 0; i < REPS; i++)
+    await group([['B0', 0], ['B', 0]].map(([v, d]) => [mode, v, d, `timing/${mode}`, { rep: i }]), timing);
   await browser.close();
 
   // Compare every run with A and B0 of the same group (mode, route or navigation).
@@ -180,7 +217,9 @@ function pxdiff(a, b) {
       const dataDiff = dataKeys.filter(k => (r.data || {})[k] !== (A.data || {})[k]).map(k => `${k}:${(A.data || {})[k]}→${(r.data || {})[k]}`);
       const tagDiff = Object.keys({ ...A.tags, ...r.tags }).filter(k => (A.tags || {})[k] !== (r.tags || {})[k] && k !== 'script')
         .map(k => `${k}:${(A.tags || {})[k] || 0}→${(r.tags || {})[k] || 0}`);
-      rows.push({ tag, variant: r.variant, errors: r.errors.length, errorSample: r.errors.slice(0, 3), routeError: r.routeError,
+      const extraErrors = r.errors.filter(e => !A.errors.includes(e));
+      rows.push({ tag, variant: r.variant, errors: r.errors.length, extraErrors, errorSample: r.errors.slice(0, 3), routeError: r.routeError,
+        servedChSha: r.servedChSha, buildSha: r.buildSha, sameRelease: r.servedChSha && A.servedChSha ? r.servedChSha === A.servedChSha && r.servedChSha === r.buildSha : null,
         ids7ok: IDS7.every(id => (r.ids7 || {})[id] === 1), duplicateScriptIds: r.duplicateScriptIds, api: r.api, bundleRequests: r.bundleRequests,
         dataDiff, sheetsEq, orderEq, orderB: r.variant === 'A' ? undefined : (orderEq ? undefined : strip(r.order)), jsonld: r.jsonld,
         textEqA: r.textSha === A.textSha, textLen: r.textLen, tagDiff: tagDiff.slice(0, 12), nodes: r.nodes, nodesA: A.nodes,
@@ -201,9 +240,10 @@ function pxdiff(a, b) {
       dcl: med(rs.map(r => r.nav && r.nav.dcl)), load: med(rs.map(r => r.nav && r.nav.load)), bundleMs: med(rs.map(r => r.api && r.api.ms)),
       htmlAfter: med(rs.map(r => r.html[0] && r.html[0].after)), htmlBr5: med(rs.map(r => r.html[0] && r.html[0].br5)) });
   }
-  const summary = { browser: browserName, profile, bundle: { name: bundleName, bytes: bundle.length, url: bundleUrl }, stubBytes: Buffer.byteLength(stub), rows, timing: tsum };
+  const summary = { browser: browserName, profile, bundle: { name: bundleName, bytes: bundle.length, url: bundleUrl }, stubBytes: Buffer.byteLength(stub),
+    builds, reruns, rows, timing: tsum };
   fs.writeFileSync(path.join(outdir, 'summary.json'), JSON.stringify(summary, null, 1));
-  const bad = rows.filter(r => r.variant.startsWith('B') && r.variant !== 'B404' && (r.errors || r.routeError || !r.ids7ok || r.duplicateScriptIds.length || r.dataDiff.length || !r.sheetsEq || !r.orderEq));
+  const bad = rows.filter(r => r.variant.startsWith('B') && r.variant !== 'B404' && (r.extraErrors.length || r.routeError || r.sameRelease === false || !r.ids7ok || r.duplicateScriptIds.length || r.dataDiff.length || !r.sheetsEq || !r.orderEq));
   console.log(`rows ${rows.length}, flagged ${bad.length}: ${bad.map(r => r.tag).join(' ')}`);
   console.table(tsum);
 })();
