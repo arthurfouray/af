@@ -1,0 +1,60 @@
+name: Arthur Fouray Systems content audit
+
+on:
+  push:
+    paths:
+      - scripts/af_content_audit.py
+      - .github/workflows/af_content_audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SITE: https://arthurfouray.systems
+      OUTPUT_DIR: ${{ github.workspace }}/af_content_audit
+      UA: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Lighthouse for accessibility, SEO and best practices
+        continue-on-error: true
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          npm install -g lighthouse@12 >/dev/null 2>&1
+          CHROME_FLAGS="--headless=new --no-sandbox --disable-dev-shm-usage"
+          # The home page also gets the performance category, so the report
+          # can name which scripts keep the main thread busy.
+          lighthouse "$SITE/" --quiet --preset=desktop \
+            --only-categories=performance,accessibility,seo,best-practices \
+            --output=json --output-path="$OUTPUT_DIR/lh_00_home.json" \
+            --chrome-flags="$CHROME_FLAGS" --max-wait-for-load=60000 || echo "lighthouse home failed"
+          i=1
+          for path in arthur-fouray music exhibition-making; do
+            lighthouse "$SITE/$path" --quiet --preset=desktop \
+              --only-categories=accessibility,seo,best-practices \
+              --output=json --output-path="$OUTPUT_DIR/lh_0${i}_${path}.json" \
+              --chrome-flags="$CHROME_FLAGS" --max-wait-for-load=60000 || echo "lighthouse $path failed"
+            i=$((i+1))
+          done
+          ls -la "$OUTPUT_DIR"
+
+      - name: Crawl the sitemap and print the content report
+        run: python scripts/af_content_audit.py
+
+      - name: Upload full audit data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: af-content-audit
+          path: af_content_audit/**
+          if-no-files-found: warn
+          retention-days: 7
