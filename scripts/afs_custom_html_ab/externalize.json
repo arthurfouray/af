@@ -1,0 +1,76 @@
+{
+ "input": {
+  "path": "custom_html.html",
+  "bytes": 97830,
+  "sha256": "8b5cc1b19985abac679f8d30dff40c10dc9ec3410dc9ee904854c65648a749ba"
+ },
+ "bundle": {
+  "name": "afs-custom-html.081f575fb0737a0c.js",
+  "bytes": 104127,
+  "sha256": "081f575fb0737a0cf8b0ae9cb8c821e2fad2372077f8eddbc770d3b3374434a2",
+  "sri": "sha384-H1/dxdt23oro/FE/8eBUQ8wTwtiicVB5VEuOe+wnt1lqehzr/A31JdSyqmqvCQmA",
+  "freightId": "F0000000000000000000000000000000",
+  "placeholderId": true
+ },
+ "gzip9": {
+  "input": 28970,
+  "bundle": 30352,
+  "stub": 4824
+ },
+ "stub": {
+  "bytes": 16884,
+  "sha256": "06caed97ad364e1b9afbbc8458a469ae31769b12fd835692b9c9c41c0894cd34",
+  "limit": 98500,
+  "headroom": 81616,
+  "option": "A (JSON-LD inline)"
+ },
+ "keptBeforeBundle": [
+  [
+   "script",
+   "afs-jsonld-site"
+  ],
+  [
+   "noscript",
+   "afs-noscript-index"
+  ],
+  [
+   "noscript",
+   ""
+  ],
+  [
+   "link",
+   ""
+  ]
+ ],
+ "movedNodes": [
+  "afs-content-root-order-guard",
+  "afs-viewport-block-presentation",
+  "afs-tk-loader",
+  "afs-tk-guard",
+  "afs-view-transition-guard",
+  "afs-native-preview-wake",
+  "afs-mode-arrival-envelope",
+  "afs-mode-root-initializer",
+  "afs-html-v1-preparse",
+  "afs-mode-css-controller-loader",
+  "afs-preview-route-sync",
+  "afs-heavy-page-loader",
+  "afs-runtime-loader",
+  "afs-persisted-mode-replay",
+  "afs-public-presentation",
+  "afs-native-html-reference",
+  "afs-html-footer-index",
+  "afs-backdrop-follow-script",
+  "afs-a11y-hidden-focus"
+ ],
+ "movedSegments": 33,
+ "tailFrom": 96782,
+ "checks": [
+  "segmentation reconstructs input",
+  "no external script moved",
+  "no inline script after tail start",
+  "exactly one preparse hook",
+  "offline interleave == input",
+  "stub <= 98500 B"
+ ]
+}

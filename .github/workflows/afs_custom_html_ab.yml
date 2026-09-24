@@ -1,0 +1,70 @@
+name: Arthur Fouray Systems Custom HTML externalisation A/B
+
+# A = published homepage, B0 = routed unchanged (control), B = the Custom HTML replaced by the
+# stub and the bundle served from its would-be Freight URL. Read-only against the public site;
+# nothing is uploaded to Cargo. See scripts/afs_custom_html_ab/run.cjs.
+on:
+  push:
+    paths:
+      - scripts/afs_custom_html_ab/**
+      - .github/workflows/afs_custom_html_ab.yml
+  workflow_dispatch:
+    inputs:
+      reps:
+        description: Timing repetitions of B0 and B@0 (systems and html)
+        required: false
+        default: '4'
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+        profile: [desktop, mobile]
+    env:
+      OUT: ${{ github.workspace }}/out/${{ matrix.browser }}-${{ matrix.profile }}
+      REPS: ${{ github.event.inputs.reps || '4' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        working-directory: scripts/afs_custom_html_ab
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.55 pngjs@7 pixelmatch@5 >/dev/null 2>&1
+          npx playwright install --with-deps ${{ matrix.browser }} >/dev/null
+          node -e "console.log('playwright', require('playwright/package.json').version)"
+
+      - name: What the site serves
+        run: |
+          mkdir -p "$OUT"
+          UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36'
+          curl -sS -A "$UA" -H 'Accept-Encoding: br, gzip' -D "$OUT/home.headers" -o "$OUT/home.enc" https://arthurfouray.systems/
+          curl -sS -A "$UA" --compressed -o "$OUT/home.html" https://arthurfouray.systems/
+          ls -l "$OUT"/home.*; grep -i -E '^(content-encoding|content-length|cache-control|cf-cache-status|server):' "$OUT/home.headers" || true
+          python3 - "$OUT/home.html" scripts/afs_custom_html_ab/live-custom-html.html <<'PY'
+          import sys, hashlib
+          h = open(sys.argv[1], encoding='utf-8').read(); c = open(sys.argv[2], encoding='utf-8').read()
+          print('R13 Custom HTML in the served page:', h.count(c), 'x; sha256', hashlib.sha256(c.encode()).hexdigest()[:16])
+          PY
+
+      - name: Run A/B
+        working-directory: scripts/afs_custom_html_ab
+        run: node run.cjs ${{ matrix.browser }} ${{ matrix.profile }} "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: afs-custom-html-ab-${{ matrix.browser }}-${{ matrix.profile }}
+          path: ${{ env.OUT }}
+          retention-days: 30
