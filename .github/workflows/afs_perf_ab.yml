@@ -1,0 +1,55 @@
+name: Arthur Fouray Systems performance A/B
+
+# Lighthouse 12 with the same Chrome flags as the render audit (PR #13) and
+# the content audit (PR #14): A = published site, B = published site plus the
+# afs-img-dedupe guard. Read-only against the public site.
+on:
+  push:
+    paths:
+      - scripts/afs_perf_ab.mjs
+      - scripts/afs-img-dedupe.min.js
+      - .github/workflows/afs_perf_ab.yml
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Lighthouse runs per variant and form factor
+        required: false
+        default: '5'
+
+permissions:
+  contents: read
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OUTPUT_DIR: ${{ github.workspace }}/afs_perf_ab
+      RUNS: ${{ github.event.inputs.runs || '5' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Lighthouse 12
+        working-directory: scripts
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund lighthouse@12 puppeteer-core@23 chrome-launcher >/dev/null 2>&1
+          node -e "console.log('lighthouse', require('./node_modules/lighthouse/package.json').version)"
+          google-chrome --version
+
+      - name: Run A/B
+        working-directory: scripts
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node afs_perf_ab.mjs "$OUTPUT_DIR" "$RUNS"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: afs-perf-ab
+          path: ${{ env.OUTPUT_DIR }}
+          retention-days: 30
