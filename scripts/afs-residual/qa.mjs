@@ -114,7 +114,8 @@ async function visit(name,form,route,variant){
     runtimeA=browserBody;runtimeB=await buildRuntime(runtimeA);
     fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
   }
-  const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),scrollHeight:document.scrollingElement.scrollHeight}));
+  const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),guardMarker:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).includes('this._afs={}'),scrollHeight:document.scrollingElement.scrollHeight}));
+  fs.writeFileSync(path.join(out,`${name}-${variant}-text.txt`),before.bodyText);
   before.bodyTextSha256=sha(Buffer.from(before.bodyText));before.bodyTextBytes=Buffer.byteLength(before.bodyText);delete before.bodyText;
   await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
   await page.evaluate(()=>{window.__afsMutationCensus.callbacks=0;window.__afsMutationCensus.attributeRecords=0;window.__afsMutationCensus.totalRecords=0});
@@ -129,7 +130,8 @@ async function visit(name,form,route,variant){
 
 try{
   outer: for(const [name,form,route] of cases){
-    for(const variant of ['A','B']){
+    const variants=['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
+    for(const variant of variants){
       if(variant==='B'&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
       try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guard:row.before.guardActive,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,errors:row.errors.length,failed:row.failed.length}))}
       catch(e){rows.push({name,form,route,variant,error:String(e)});console.error(JSON.stringify({name,variant,error:String(e)}))}
@@ -141,12 +143,12 @@ const pairs=cases.map(([name])=>({name,A:rows.find(r=>r.name===name&&r.variant==
 const failures=[];
 for(const p of pairs){
   if(!p.A||!p.B||p.A.error||p.B.error){failures.push(`${p.name}: missing or failed case`);continue}
-  if(!p.B.bundleLoaded||!p.B.runtimeLoaded||!p.B.before.guardActive)failures.push(`${p.name}: candidate bundle/runtime/guard not active`);
+  if(!p.B.bundleLoaded||!p.B.runtimeLoaded||!p.B.before.guardMarker)failures.push(`${p.name}: candidate bundle/runtime/guard not active`);
   for(const k of ['mode','title','bodyTextSha256','pages','mediaItems','navLayers'])if(p.A.before[k]!==p.B.before[k])failures.push(`${p.name}: ${k} differs`);
   for(const k of ['mode','navLayers','mediaItems','htmlTone'])if(p.A.after[k]!==p.B.after[k])failures.push(`${p.name}: mid ${k} differs`);
   const extra=p.B.errors.filter(x=>!p.A.errors.includes(x));if(extra.length)failures.push(`${p.name}: candidate-only page errors ${extra.length}`);
 }
-const summary={cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:pairs.map(p=>({name:p.name,A:p.A?.after?.mutationCensus,B:p.B?.after?.mutationCensus}))};
+const summary={cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:pairs.map(p=>({name:p.name,A:p.A?.after?.mutationCensus,B:p.B?.after?.mutationCensus})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
 fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
 console.log(JSON.stringify(summary));
-if(failures.length||rows.length!==cases.length*2)process.exitCode=1;
+if(failures.length||rows.length!==cases.length*2+2)process.exitCode=1;
