@@ -97,9 +97,21 @@ async function visit(name,form,route,variant){
     const replies=await Promise.all(runtimeReplies);
     const good=replies.find(r=>r.status===200&&r.body);
     if(!good)throw Error('published runtime response not captured: '+JSON.stringify(replies.map(r=>({status:r.status,error:r.error,url:r.url}))));
-    fs.writeFileSync(path.join(out,'runtime-source-observation.json'),JSON.stringify({status:good.status,url:good.url,contentType:good.contentType,bytes:good.body.length,sha256:sha(good.body)},null,2));
+    const browserProbe=await page.evaluate(async url=>{
+      const root=document.documentElement;
+      const loader={state:root.dataset.afsRuntimeLoader,error:root.dataset.afsRuntimeLoaderError,resourceState:root.dataset.afsRuntimeResourceState,resourceError:root.dataset.afsRuntimeResourceError};
+      try{
+        const response=await fetch(url,{credentials:'omit',cache:'force-cache',redirect:'error'});
+        const bytes=new Uint8Array(await response.arrayBuffer());
+        const chunks=[];for(let i=0;i<bytes.length;i+=8192)chunks.push(String.fromCharCode(...bytes.slice(i,i+8192)));
+        return {status:response.status,contentType:response.headers.get('content-type'),bytes:bytes.length,base64:btoa(chunks.join('')),loader};
+      }catch(e){return {error:String(e),loader}}
+    },good.url);
+    const browserBody=browserProbe.base64?Buffer.from(browserProbe.base64,'base64'):null;
+    fs.writeFileSync(path.join(out,'runtime-source-observation.json'),JSON.stringify({status:good.status,url:good.url,contentType:good.contentType,playwrightBytes:good.body.length,playwrightSha256:sha(good.body),browserStatus:browserProbe.status,browserContentType:browserProbe.contentType,browserBytes:browserBody?.length,browserSha256:browserBody&&sha(browserBody),browserError:browserProbe.error,loader:browserProbe.loader},null,2));
     fs.writeFileSync(path.join(out,'runtime-served-for-diff.txt'),good.body);
-    runtimeA=good.body;runtimeB=await buildRuntime(runtimeA);
+    if(!browserBody)throw Error('in-page runtime fetch failed: '+browserProbe.error);
+    runtimeA=browserBody;runtimeB=await buildRuntime(runtimeA);
     fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
   }
   const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),scrollHeight:document.scrollingElement.scrollHeight}));
