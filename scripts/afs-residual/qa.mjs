@@ -35,7 +35,7 @@ const rows=[];let runtimeA=null,runtimeB=null;
 const runtimeReplies=[];
 
 async function buildRuntime(buf){
-  if(buf.length!==407172||sha(buf)!=='4f0da0796acfc010018a9fcf7ea04fea314e707a00c24bf56100b43d10b9557e')throw Error('live runtime changed; cannot patch this base');
+  if(buf.length!==407172||sha(buf)!=='4f0da0796acfc010018a9fcf7ea04fea314e707a00c24bf56100b43d10b9557e')throw Error(`live runtime changed; observed bytes=${buf.length} sha256=${sha(buf)}; cannot patch this base`);
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'afs-runtime-'));
   const a=path.join(dir,'runtime-a.txt'),b=path.join(dir,'runtime-b.txt');
   fs.writeFileSync(a,buf);
@@ -88,7 +88,7 @@ async function visit(name,form,route,variant){
   page.on('pageerror',e=>errors.push(String(e).slice(0,300)));
   page.on('requestfailed',r=>failed.push({url:r.url().slice(0,180),failure:r.failure()?.errorText}));
   if(variant==='A'&&!runtimeA)page.on('response',r=>{
-    if(r.url().includes('/'+oldRuntime))runtimeReplies.push(r.body().then(b=>({status:r.status(),body:b,url:r.url()})).catch(e=>({error:String(e)})));
+    if(r.url().includes('/'+oldRuntime))runtimeReplies.push(r.body().then(b=>({status:r.status(),body:b,url:r.url(),contentType:r.headers()['content-type']})).catch(e=>({error:String(e)})));
   });
   let navigation=null;
   try{await page.goto('https://arthurfouray.systems'+route,{waitUntil:'load',timeout:120000})}catch(e){navigation=String(e).slice(0,300)}
@@ -97,6 +97,7 @@ async function visit(name,form,route,variant){
     const replies=await Promise.all(runtimeReplies);
     const good=replies.find(r=>r.status===200&&r.body);
     if(!good)throw Error('published runtime response not captured: '+JSON.stringify(replies.map(r=>({status:r.status,error:r.error,url:r.url}))));
+    fs.writeFileSync(path.join(out,'runtime-source-observation.json'),JSON.stringify({status:good.status,url:good.url,contentType:good.contentType,bytes:good.body.length,sha256:sha(good.body)},null,2));
     runtimeA=good.body;runtimeB=await buildRuntime(runtimeA);
     fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
   }
@@ -114,8 +115,9 @@ async function visit(name,form,route,variant){
 }
 
 try{
-  for(const [name,form,route] of cases){
+  outer: for(const [name,form,route] of cases){
     for(const variant of ['A','B']){
+      if(variant==='B'&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
       try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guard:row.before.guardActive,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,errors:row.errors.length,failed:row.failed.length}))}
       catch(e){rows.push({name,form,route,variant,error:String(e)});console.error(JSON.stringify({name,variant,error:String(e)}))}
       fs.writeFileSync(path.join(out,'rows.json'),JSON.stringify(rows,null,2));
