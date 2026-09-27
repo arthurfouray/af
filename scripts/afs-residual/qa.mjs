@@ -98,6 +98,7 @@ async function visit(name,form,route,variant){
     const good=replies.find(r=>r.status===200&&r.body);
     if(!good)throw Error('published runtime response not captured: '+JSON.stringify(replies.map(r=>({status:r.status,error:r.error,url:r.url}))));
     fs.writeFileSync(path.join(out,'runtime-source-observation.json'),JSON.stringify({status:good.status,url:good.url,contentType:good.contentType,bytes:good.body.length,sha256:sha(good.body)},null,2));
+    fs.writeFileSync(path.join(out,'runtime-served-for-diff.txt'),good.body);
     runtimeA=good.body;runtimeB=await buildRuntime(runtimeA);
     fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
   }
@@ -127,7 +128,7 @@ try{
 const pairs=cases.map(([name])=>({name,A:rows.find(r=>r.name===name&&r.variant==='A'),B:rows.find(r=>r.name===name&&r.variant==='B')}));
 const failures=[];
 for(const p of pairs){
-  if(p.A?.error||p.B?.error){failures.push(`${p.name}: case error`);continue}
+  if(!p.A||!p.B||p.A.error||p.B.error){failures.push(`${p.name}: missing or failed case`);continue}
   if(!p.B.bundleLoaded||!p.B.runtimeLoaded||!p.B.before.guardActive)failures.push(`${p.name}: candidate bundle/runtime/guard not active`);
   for(const k of ['mode','title','bodyTextSha256','pages','mediaItems','navLayers'])if(p.A.before[k]!==p.B.before[k])failures.push(`${p.name}: ${k} differs`);
   for(const k of ['mode','navLayers','mediaItems','htmlTone'])if(p.A.after[k]!==p.B.after[k])failures.push(`${p.name}: mid ${k} differs`);
