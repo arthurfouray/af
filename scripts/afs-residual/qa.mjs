@@ -17,14 +17,23 @@ const oldRuntime='afs-site-runtime-v6.0.8-4f0da0796acfc010.txt';
 const placeholder='F0000000000000000000000000000000';
 const newBundleName='afs-custom-html.cf4656f21e4f0660.js';
 const newRuntimeName='afs-site-runtime-v6.0.8-164a55f93430de03.txt';
+const guardBundleName='afs-custom-html.9fa236ba491c8b98.js';
+const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime';
 const newBundle=fs.readFileSync(path.join(here,newBundleName));
 const newStub=fs.readFileSync(path.join(here,'Custom-HTML.stub.PLACEHOLDER.html'),'utf8');
+const guardBundle=runtimeMatrix?fs.readFileSync(path.join(here,guardBundleName)):null;
+const guardStub=runtimeMatrix?fs.readFileSync(path.join(here,'Custom-HTML.guard-only.stub.PLACEHOLDER.html'),'utf8'):null;
 const tagPattern=/<script id="afs-custom-html-bundle"[^>]*><\/script>/g;
 const tagHits=[...newStub.matchAll(tagPattern)];
 if(tagHits.length!==1||sha(newBundle)!=='cf4656f21e4f0660d0e1fb43338d648a9eefccd3ecdc139abda38ea0a131f248')throw Error('candidate bundle/stub pin mismatch');
 const newTag=tagHits[0][0];
 if(!newTag.includes(newBundleName)||!newTag.includes(placeholder))throw Error('candidate tag does not match placeholder bundle');
-const cases=[
+const guardTags=runtimeMatrix?[...guardStub.matchAll(tagPattern)]:[];
+if(runtimeMatrix&&(guardTags.length!==1||sha(guardBundle)!=='9fa236ba491c8b98f183cffc0d3c0a3c13a71f677f051da9faa61ed47850adff'))throw Error('guard-only bundle/stub pin mismatch');
+const guardTag=runtimeMatrix?guardTags[0][0]:null;
+const cases=runtimeMatrix?[
+  ['desktop-home','desktop','/'],['mobile-home','mobile','/']
+]:[
   ['desktop-home','desktop','/'],['mobile-home','mobile','/'],
   ['desktop-html','desktop','/?mode=html'],['desktop-clean','desktop','/?mode=clean'],
   ['desktop-before-arts','desktop','/before-arts'],['mobile-before-arts','mobile','/before-arts']
@@ -53,6 +62,8 @@ function sanitizeHeaders(response){
 }
 
 async function visit(name,form,route,variant){
+  const combined=variant==='B'||variant==='B2';
+  const guardOnly=variant==='C'||variant==='C2';
   const ctx=await browser.newContext(profiles[form]);
   await ctx.addInitScript(()=>{
     const old=window.MutationObserver;
@@ -70,10 +81,11 @@ async function visit(name,form,route,variant){
       documentPin=sha(Buffer.from(body));
       if(documentPin!=='8823ffd20a7bbad6523e7db616ff5a98c79e2b245288d6ab83e50d311c2555b0')throw Error('public homepage changed');
     }
-    if(variant==='B')body=body.replace(tagPattern,newTag);
+    if(combined)body=body.replace(tagPattern,newTag);
+    if(guardOnly)body=body.replace(tagPattern,guardTag);
     await r.fulfill({status:resp.status(),headers:sanitizeHeaders(resp),body});
   });
-  if(variant==='B'){
+  if(combined){
     await ctx.route(u=>u.hostname==='freight.cargo.site'&&u.pathname.endsWith('/'+newBundleName),async r=>{
       bundleLoaded=true;
       await r.fulfill({status:200,body:newBundle,headers:{'content-type':'application/javascript; charset=utf-8','access-control-allow-origin':'*','cache-control':'no-store'}});
@@ -84,7 +96,20 @@ async function visit(name,form,route,variant){
       await r.fulfill({status:200,body:runtimeB,headers:{'content-type':'text/plain; charset=utf-8','access-control-allow-origin':'*','cache-control':'no-store'}});
     });
   }
+  if(guardOnly){
+    await ctx.route(u=>u.hostname==='freight.cargo.site'&&u.pathname.endsWith('/'+guardBundleName),async r=>{
+      bundleLoaded=true;
+      await r.fulfill({status:200,body:guardBundle,headers:{'content-type':'application/javascript; charset=utf-8','access-control-allow-origin':'*','cache-control':'no-store'}});
+    });
+  }
   const page=await ctx.newPage();
+  const cdp=await ctx.newCDPSession(page);
+  await cdp.send('Network.enable');
+  const requests=new Map();
+  cdp.on('Network.requestWillBeSent',e=>requests.set(e.requestId,{url:e.request.url,type:e.type}));
+  cdp.on('Network.responseReceived',e=>{const x=requests.get(e.requestId);if(x)x.status=e.response.status});
+  cdp.on('Network.loadingFinished',e=>{const x=requests.get(e.requestId);if(x)x.bytes=e.encodedDataLength});
+  cdp.on('Network.loadingFailed',e=>{const x=requests.get(e.requestId);if(x)x.failed=e.errorText});
   page.on('pageerror',e=>errors.push(String(e).slice(0,300)));
   page.on('requestfailed',r=>failed.push({url:r.url().slice(0,180),failure:r.failure()?.errorText}));
   if(variant==='A'&&!runtimeA)page.on('response',r=>{
@@ -123,17 +148,19 @@ async function visit(name,form,route,variant){
   await page.waitForTimeout(6000);
   const after=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,scrollY,scrollHeight:document.scrollingElement.scrollHeight,navLayers:document.querySelectorAll('.nav-layer').length,mediaItems:document.querySelectorAll('media-item').length,htmlTone:document.documentElement.getAttribute('data-nav-tone'),mutationCensus:{...window.__afsMutationCensus}}));
   await page.screenshot({path:path.join(out,`${name}-${variant}-mid.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
-  const row={name,form,route,variant,documentPin,navigation,bundleLoaded,runtimeLoaded,before,after,errors,failed};
+  const images=[...requests.values()].filter(x=>/freight\.cargo\.site\/.*\.(gif|png|jpe?g|webp|avif|svg)(\?|$)/i.test(x.url));
+  const network={imageRequests:images.length,imageBytes:images.reduce((n,x)=>n+(x.bytes||0),0),w300h300:images.filter(x=>/\/w\/300\/h\/300\//.test(x.url)).length,failedImages:images.filter(x=>x.failed).length,images:images.map(x=>({url:x.url.replace('https://freight.cargo.site',''),bytes:x.bytes||0,status:x.status,failed:x.failed}))};
+  const row={name,form,route,variant,documentPin,navigation,bundleLoaded,runtimeLoaded,before,after,network,errors,failed};
   await ctx.close();
   return row;
 }
 
 try{
   outer: for(const [name,form,route] of cases){
-    const variants=['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
+    const variants=runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
     for(const variant of variants){
-      if(variant==='B'&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
-      try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guard:row.before.guardActive,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,errors:row.errors.length,failed:row.failed.length}))}
+      if((variant==='B'||variant==='B2')&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
+      try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guardMarker:row.before.guardMarker,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,images:row.network.imageRequests,imageBytes:row.network.imageBytes,w300h300:row.network.w300h300,errors:row.errors.length,failed:row.failed.length}))}
       catch(e){rows.push({name,form,route,variant,error:String(e)});console.error(JSON.stringify({name,variant,error:String(e)}))}
       fs.writeFileSync(path.join(out,'rows.json'),JSON.stringify(rows,null,2));
     }
@@ -143,12 +170,17 @@ const pairs=cases.map(([name])=>({name,A:rows.find(r=>r.name===name&&r.variant==
 const failures=[];
 for(const p of pairs){
   if(!p.A||!p.B||p.A.error||p.B.error){failures.push(`${p.name}: missing or failed case`);continue}
-  if(!p.B.bundleLoaded||!p.B.runtimeLoaded||!p.B.before.guardMarker)failures.push(`${p.name}: candidate bundle/runtime/guard not active`);
-  for(const k of ['mode','title','bodyTextSha256','pages','mediaItems','navLayers'])if(p.A.before[k]!==p.B.before[k])failures.push(`${p.name}: ${k} differs`);
-  for(const k of ['mode','navLayers','mediaItems','htmlTone'])if(p.A.after[k]!==p.B.after[k])failures.push(`${p.name}: mid ${k} differs`);
+  if(!p.B.bundleLoaded||!p.B.runtimeLoaded)failures.push(`${p.name}: candidate bundle/runtime not active`);
+  if(!runtimeMatrix){
+    for(const k of ['mode','title','bodyTextSha256','pages','mediaItems','navLayers'])if(p.A.before[k]!==p.B.before[k])failures.push(`${p.name}: ${k} differs`);
+    for(const k of ['mode','navLayers','mediaItems','htmlTone'])if(p.A.after[k]!==p.B.after[k])failures.push(`${p.name}: mid ${k} differs`);
+  }else{
+    const c=rows.find(r=>r.name===p.name&&r.variant==='C');
+    if(!c||c.error||!c.bundleLoaded)failures.push(`${p.name}: guard-only control did not load`);
+  }
   const extra=p.B.errors.filter(x=>!p.A.errors.includes(x));if(extra.length)failures.push(`${p.name}: candidate-only page errors ${extra.length}`);
 }
-const summary={cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:pairs.map(p=>({name:p.name,A:p.A?.after?.mutationCensus,B:p.B?.after?.mutationCensus})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
+const summary={matrix:runtimeMatrix?'runtime':'parity',cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:cases.map(([name])=>({name,...Object.fromEntries((runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B','A2']).map(v=>[v,rows.find(r=>r.name===name&&r.variant===v)?.after?.mutationCensus]))})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
 fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
 console.log(JSON.stringify(summary));
-if(failures.length||rows.length!==cases.length*2+2)process.exitCode=1;
+if(failures.length||rows.length!==(runtimeMatrix?cases.length*6:cases.length*2+2))process.exitCode=1;
