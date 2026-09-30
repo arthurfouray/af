@@ -1,0 +1,503 @@
+{
+  "sourceHomePin": "a89eba0a92e595af75183f9e1768c27e453c8d99f1dbeaa048b991f75dfe5d6f",
+  "sourceFieldSha": "d3ce518f02ef39cc56a8ccf6de78a871fc657fa622a302ac2058dc7024f72aef",
+  "cargoFrontend": "b8c0c2",
+  "scope": "Outside measured window; normal browser GIF responses, no denial retry; current transform/source byte identity",
+  "accepted": true,
+  "assets": [
+    {
+      "hash": "D2192560758175193068614170183083",
+      "name": "Arthur-Fouray-ppplus.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+      "originalSha256": "2c163692cd30d238cb41849bb6bf68bc307d423f9b7d00f82a87e69be9c672e2",
+      "originalBytes": 228062,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 228062,
+        "sha256": "2c163692cd30d238cb41849bb6bf68bc307d423f9b7d00f82a87e69be9c672e2",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 228062,
+        "sha256": "2c163692cd30d238cb41849bb6bf68bc307d423f9b7d00f82a87e69be9c672e2",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "Z2192560758212086556761589286315",
+      "name": "Arthur-Fouray-rt4a.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+      "originalSha256": "d6e6637e615af0a4488f0061d54fc23396616ce2b13be152524375f83047a633",
+      "originalBytes": 967675,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 967675,
+        "sha256": "d6e6637e615af0a4488f0061d54fc23396616ce2b13be152524375f83047a633",
+        "header": "GIF89a",
+        "width": 400,
+        "height": 400
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 967675,
+        "sha256": "d6e6637e615af0a4488f0061d54fc23396616ce2b13be152524375f83047a633",
+        "header": "GIF89a",
+        "width": 400,
+        "height": 400
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "W2192560758101406092319331976619",
+      "name": "Arthur-Fouray-aplusominus.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+      "originalSha256": "ba478c43dd37988c6c607e2b255021c13c0c13816aad9d4d4b5b4a176c548dc1",
+      "originalBytes": 838491,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 838491,
+        "sha256": "ba478c43dd37988c6c607e2b255021c13c0c13816aad9d4d4b5b4a176c548dc1",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 838491,
+        "sha256": "ba478c43dd37988c6c607e2b255021c13c0c13816aad9d4d4b5b4a176c548dc1",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "H2192560758156746324540460631467",
+      "name": "Arthur-Fouray-mmm.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+      "originalSha256": "32b96563b6624a91ed89d6aab0123ad322a69477db4f257da83359c6369521c1",
+      "originalBytes": 61220,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 61220,
+        "sha256": "32b96563b6624a91ed89d6aab0123ad322a69477db4f257da83359c6369521c1",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 61220,
+        "sha256": "32b96563b6624a91ed89d6aab0123ad322a69477db4f257da83359c6369521c1",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "K2192560758193639812687879734699",
+      "name": "Arthur-Fouray-Pre-Natal.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+      "originalSha256": "83e1aedfe81f44bb7106d2a42caeaaaed1e6706fd19eaa148f2da6684e7eb080",
+      "originalBytes": 596328,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 596328,
+        "sha256": "83e1aedfe81f44bb7106d2a42caeaaaed1e6706fd19eaa148f2da6684e7eb080",
+        "header": "GIF89a",
+        "width": 500,
+        "height": 500
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 596328,
+        "sha256": "83e1aedfe81f44bb7106d2a42caeaaaed1e6706fd19eaa148f2da6684e7eb080",
+        "header": "GIF89a",
+        "width": 500,
+        "height": 500
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "E2192560758119852836393041528235",
+      "name": "Arthur-Fouray-Before-Arts.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+      "originalSha256": "2c947dc20837e947c4a9df5454d4fbb281200c4a108313916fbeec42ca67d225",
+      "originalBytes": 541601,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 541601,
+        "sha256": "2c947dc20837e947c4a9df5454d4fbb281200c4a108313916fbeec42ca67d225",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 541601,
+        "sha256": "2c947dc20837e947c4a9df5454d4fbb281200c4a108313916fbeec42ca67d225",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "A2192560758230533300835298837931",
+      "name": "Arthur-Fouray-Screen.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "originalSha256": "5c78f5ba9d9af53127e6b7fa8bf886ca88feef12f96bd4e063b66c5a52aa215b",
+      "originalBytes": 283126,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 283126,
+        "sha256": "5c78f5ba9d9af53127e6b7fa8bf886ca88feef12f96bd4e063b66c5a52aa215b",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 283126,
+        "sha256": "5c78f5ba9d9af53127e6b7fa8bf886ca88feef12f96bd4e063b66c5a52aa215b",
+        "header": "GIF89a",
+        "width": 750,
+        "height": 750
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "L2192560758082959348245622425003",
+      "name": "Arthur-Fouray-aaafff.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "originalSha256": "9da8027a10f1d6922f3cb9ed72c8ee95bf88f16308f4a6af7280af40544288b7",
+      "originalBytes": 900104,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 900104,
+        "sha256": "9da8027a10f1d6922f3cb9ed72c8ee95bf88f16308f4a6af7280af40544288b7",
+        "header": "GIF89a",
+        "width": 500,
+        "height": 500
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 900104,
+        "sha256": "9da8027a10f1d6922f3cb9ed72c8ee95bf88f16308f4a6af7280af40544288b7",
+        "header": "GIF89a",
+        "width": 500,
+        "height": 500
+      },
+      "exactBodyIdentity": true
+    },
+    {
+      "hash": "D2192496156146367179646518166955",
+      "name": "rt4a-Exhibition-Making.gif",
+      "canonicalUrl": "https://freight.cargo.site/w/200/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "thumbnailUrl": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "originalSha256": "c520db29d85fdc2cd27de3c7bf4d9bf5ec0084b7db756e9311703af92029f09f",
+      "originalBytes": 32519,
+      "thumbnail": {
+        "url": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 32519,
+        "sha256": "c520db29d85fdc2cd27de3c7bf4d9bf5ec0084b7db756e9311703af92029f09f",
+        "header": "GIF89a",
+        "width": 1500,
+        "height": 1500
+      },
+      "canonical": {
+        "url": "https://freight.cargo.site/w/200/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+        "status": 200,
+        "contentType": "image/gif",
+        "bytes": 32519,
+        "sha256": "c520db29d85fdc2cd27de3c7bf4d9bf5ec0084b7db756e9311703af92029f09f",
+        "header": "GIF89a",
+        "width": 1500,
+        "height": 1500
+      },
+      "exactBodyIdentity": true
+    }
+  ],
+  "denied": [],
+  "probes": [
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "state": "loaded"
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "state": "loaded"
+    }
+  ],
+  "responses": [
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 228062,
+      "sha256": "2c163692cd30d238cb41849bb6bf68bc307d423f9b7d00f82a87e69be9c672e2",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 967675,
+      "sha256": "d6e6637e615af0a4488f0061d54fc23396616ce2b13be152524375f83047a633",
+      "header": "GIF89a",
+      "width": 400,
+      "height": 400
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 596328,
+      "sha256": "83e1aedfe81f44bb7106d2a42caeaaaed1e6706fd19eaa148f2da6684e7eb080",
+      "header": "GIF89a",
+      "width": 500,
+      "height": 500
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 838491,
+      "sha256": "ba478c43dd37988c6c607e2b255021c13c0c13816aad9d4d4b5b4a176c548dc1",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 61220,
+      "sha256": "32b96563b6624a91ed89d6aab0123ad322a69477db4f257da83359c6369521c1",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 541601,
+      "sha256": "2c947dc20837e947c4a9df5454d4fbb281200c4a108313916fbeec42ca67d225",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/D2192560758175193068614170183083/Arthur-Fouray-ppplus.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 228062,
+      "sha256": "2c163692cd30d238cb41849bb6bf68bc307d423f9b7d00f82a87e69be9c672e2",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/Z2192560758212086556761589286315/Arthur-Fouray-rt4a.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 967675,
+      "sha256": "d6e6637e615af0a4488f0061d54fc23396616ce2b13be152524375f83047a633",
+      "header": "GIF89a",
+      "width": 400,
+      "height": 400
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/W2192560758101406092319331976619/Arthur-Fouray-aplusominus.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 838491,
+      "sha256": "ba478c43dd37988c6c607e2b255021c13c0c13816aad9d4d4b5b4a176c548dc1",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/H2192560758156746324540460631467/Arthur-Fouray-mmm.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 61220,
+      "sha256": "32b96563b6624a91ed89d6aab0123ad322a69477db4f257da83359c6369521c1",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/K2192560758193639812687879734699/Arthur-Fouray-Pre-Natal.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 596328,
+      "sha256": "83e1aedfe81f44bb7106d2a42caeaaaed1e6706fd19eaa148f2da6684e7eb080",
+      "header": "GIF89a",
+      "width": 500,
+      "height": 500
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/E2192560758119852836393041528235/Arthur-Fouray-Before-Arts.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 541601,
+      "sha256": "2c947dc20837e947c4a9df5454d4fbb281200c4a108313916fbeec42ca67d225",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 283126,
+      "sha256": "5c78f5ba9d9af53127e6b7fa8bf886ca88feef12f96bd4e063b66c5a52aa215b",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 32519,
+      "sha256": "c520db29d85fdc2cd27de3c7bf4d9bf5ec0084b7db756e9311703af92029f09f",
+      "header": "GIF89a",
+      "width": 1500,
+      "height": 1500
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 900104,
+      "sha256": "9da8027a10f1d6922f3cb9ed72c8ee95bf88f16308f4a6af7280af40544288b7",
+      "header": "GIF89a",
+      "width": 500,
+      "height": 500
+    },
+    {
+      "url": "https://freight.cargo.site/w/200/q/75/i/L2192560758082959348245622425003/Arthur-Fouray-aaafff.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 900104,
+      "sha256": "9da8027a10f1d6922f3cb9ed72c8ee95bf88f16308f4a6af7280af40544288b7",
+      "header": "GIF89a",
+      "width": 500,
+      "height": 500
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/D2192496156146367179646518166955/rt4a-Exhibition-Making.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 32519,
+      "sha256": "c520db29d85fdc2cd27de3c7bf4d9bf5ec0084b7db756e9311703af92029f09f",
+      "header": "GIF89a",
+      "width": 1500,
+      "height": 1500
+    },
+    {
+      "url": "https://freight.cargo.site/w/300/h/300/q/75/i/A2192560758230533300835298837931/Arthur-Fouray-Screen.gif",
+      "status": 200,
+      "contentType": "image/gif",
+      "bytes": 283126,
+      "sha256": "5c78f5ba9d9af53127e6b7fa8bf886ca88feef12f96bd4e063b66c5a52aa215b",
+      "header": "GIF89a",
+      "width": 750,
+      "height": 750
+    }
+  ]
+}
