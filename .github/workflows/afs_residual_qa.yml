@@ -25,7 +25,7 @@ jobs:
       - name: Run matched public A/B
         working-directory: scripts/afs-residual
         env:
-          AFS_QA_MATRIX: runtime
+          AFS_QA_MATRIX: paint-control
           AFS_QA_PAINT_DIAGNOSTIC: '0'
         run: node qa.mjs "$GITHUB_WORKSPACE/afs-residual-qa"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

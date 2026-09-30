@@ -18,7 +18,14 @@ const placeholder='F0000000000000000000000000000000';
 const newBundleName='afs-custom-html.f348acaf25672458.js';
 const newRuntimeName='afs-site-runtime-v6.0.8-164a55f93430de03.txt';
 const guardBundleName='afs-custom-html.da37965d685647a9.js';
-const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime';
+const noopMatrix=process.env.AFS_QA_MATRIX==='paint-control';
+const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime'||noopMatrix;
+const noopBundle=fs.readFileSync(path.join(here,oldBundle));
+const runtimeOnlyName='afs-custom-html.aea5e9cf36008686.js';
+const runtimeOnlyBundle=fs.readFileSync(path.join(here,runtimeOnlyName));
+const noopStub=fs.readFileSync(path.join(here,'Custom-HTML.noop.stub.PLACEHOLDER.html'),'utf8');
+const runtimeOnlyStub=fs.readFileSync(path.join(here,'Custom-HTML.runtime-only.stub.PLACEHOLDER.html'),'utf8');
+if(sha(noopBundle)!=='7eb327015e626fd36e1b5ed824faec6e5dbe6bb9fefe5fd5b9f2a10608845d18'||sha(runtimeOnlyBundle)!=='aea5e9cf360086863ebac714add32a1100d764e18c966b31143f8a6e911f04ef')throw Error('No-op/runtime-only base mismatch');
 const paintDiagnostic=process.env.AFS_QA_PAINT_DIAGNOSTIC==='1';
 const newBundle=fs.readFileSync(path.join(here,newBundleName));
 const newStub=fs.readFileSync(path.join(here,'Custom-HTML.stub.PLACEHOLDER.html'),'utf8');
@@ -32,7 +39,7 @@ if(!newTag.includes(newBundleName)||!newTag.includes(placeholder))throw Error('c
 const guardTags=runtimeMatrix?[...guardStub.matchAll(tagPattern)]:[];
 if(runtimeMatrix&&(guardTags.length!==1||sha(guardBundle)!=='da37965d685647a935ef7ad255fcddff53b432b004d5e5485146ee54b4ad5594'))throw Error('guard-only bundle/stub pin mismatch');
 const guardTag=runtimeMatrix?guardTags[0][0]:null;
-const cases=runtimeMatrix?[
+const cases=noopMatrix?[['mobile-home','mobile','/']]:runtimeMatrix?[
   ['desktop-home','desktop','/'],['mobile-home','mobile','/']
 ]:[
   ['desktop-home','desktop','/'],['mobile-home','mobile','/'],
@@ -83,6 +90,8 @@ function sanitizeHeaders(response){
 
 async function visit(name,form,route,variant){
   const combined=variant==='B'||variant==='B2';
+  const runtimeOnly=variant==='D';
+  const noop=variant==='E';
   const guardOnly=variant==='C'||variant==='C2';
   const ctx=await browser.newContext(profiles[form]);
   await ctx.addInitScript(()=>{
@@ -110,8 +119,17 @@ async function visit(name,form,route,variant){
     }
     if(combined)body=substituteCustomHtml(body,tags[0][0],newTag);
     if(guardOnly)body=substituteCustomHtml(body,tags[0][0],guardTag);
+    if(runtimeOnly)body=substituteCustomHtml(body,tags[0][0],[...runtimeOnlyStub.matchAll(tagPattern)][0][0]);
+    if(noop)body=substituteCustomHtml(body,tags[0][0],[...noopStub.matchAll(tagPattern)][0][0]);
     await r.fulfill({status:resp.status(),headers:sanitizeHeaders(resp),body});
   });
+  if(noop||runtimeOnly){
+    const file=noop?oldBundle:runtimeOnlyName,buf=noop?noopBundle:runtimeOnlyBundle;
+    await ctx.route(u=>u.hostname==='freight.cargo.site'&&u.pathname.endsWith('/'+file),async r=>{bundleLoaded=true;await r.fulfill({status:200,body:buf,headers:{'content-type':'application/javascript; charset=utf-8','access-control-allow-origin':'*','cache-control':'no-store'}})});
+  }
+  if(runtimeOnly){
+    await ctx.route(u=>u.hostname==='freight.cargo.site'&&u.pathname.endsWith('/'+newRuntimeName),async r=>{if(!runtimeB)throw Error('runtime B missing');runtimeLoaded=true;await r.fulfill({status:200,body:runtimeB,headers:{'content-type':'text/plain; charset=utf-8','access-control-allow-origin':'*','cache-control':'no-store'}})});
+  }
   if(combined){
     await ctx.route(u=>u.hostname==='freight.cargo.site'&&u.pathname.endsWith('/'+newBundleName),async r=>{
       bundleLoaded=true;
@@ -207,7 +225,7 @@ async function visit(name,form,route,variant){
 
 try{
   outer: for(const [name,form,route] of cases){
-    const variants=runtimeMatrix?(paintDiagnostic?['A','C','B']:['A','C','B','A2','C2','B2']):['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
+    const variants=noopMatrix?['A','E','D','C','B']:runtimeMatrix?(paintDiagnostic?['A','C','B']:['A','C','B','A2','C2','B2']):['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
     for(const variant of variants){
       if((variant==='B'||variant==='B2')&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
       try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guardMarker:row.before.guardMarker,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,images:row.network.imageRequests,imageBytes:row.network.imageBytes,w300h300:row.network.w300h300,errors:row.errors.length,failed:row.failed.length}))}
@@ -233,4 +251,4 @@ for(const p of pairs){
 const summary={matrix:runtimeMatrix?'runtime':'parity',cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:cases.map(([name])=>({name,...Object.fromEntries((runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B','A2']).map(v=>[v,rows.find(r=>r.name===name&&r.variant===v)?.after?.mutationCensus]))})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
 fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
 console.log(JSON.stringify(summary));
-if(failures.length||rows.length!==(runtimeMatrix?cases.length*(paintDiagnostic?3:6):cases.length*2+2))process.exitCode=1;
+if(failures.length||rows.length!==(noopMatrix?5:runtimeMatrix?cases.length*(paintDiagnostic?3:6):cases.length*2+2))process.exitCode=1;
