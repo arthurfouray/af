@@ -19,6 +19,7 @@ const newBundleName='afs-custom-html.cf4656f21e4f0660.js';
 const newRuntimeName='afs-site-runtime-v6.0.8-164a55f93430de03.txt';
 const guardBundleName='afs-custom-html.9fa236ba491c8b98.js';
 const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime';
+const paintDiagnostic=process.env.AFS_QA_PAINT_DIAGNOSTIC==='1';
 const newBundle=fs.readFileSync(path.join(here,newBundleName));
 const newStub=fs.readFileSync(path.join(here,'Custom-HTML.stub.PLACEHOLDER.html'),'utf8');
 const guardBundle=runtimeMatrix?fs.readFileSync(path.join(here,guardBundleName)):null;
@@ -150,6 +151,27 @@ async function visit(name,form,route,variant){
   fs.writeFileSync(path.join(out,`${name}-${variant}-text.txt`),before.bodyText);
   before.bodyTextSha256=sha(Buffer.from(before.bodyText));before.bodyTextBytes=Buffer.byteLength(before.bodyText);delete before.bodyText;
   await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
+  let paintDiagnostics=null;
+  if(paintDiagnostic){
+    async function paintState(){return page.evaluate(()=>{
+      const styleOf=n=>{const s=getComputedStyle(n),b=n.getBoundingClientRect();return {tag:n.tagName,id:n.id,classes:typeof n.className==='string'?n.className:'',attrs:Object.fromEntries([...n.attributes].map(x=>[x.name,x.value])),rect:{x:b.x,y:b.y,width:b.width,height:b.height},style:Object.fromEntries(['display','visibility','opacity','color','backgroundColor','filter','transform','mixBlendMode','overflow','clipPath','zIndex','pointerEvents','fontFamily','animationName','animationPlayState','transitionProperty'].map(k=>[k,s[k]]))}};
+      const nodes=[...document.querySelectorAll('#tools,.nav-layer,[data-set-mode]')].slice(0,100).map(styleOf);
+      const media=[...document.querySelectorAll('media-item')].map(n=>{const b=n.getBoundingClientRect();return {node:n,b}}).filter((x,i)=>i<12||x.b.y<innerHeight&&x.b.y+x.b.height>0).map(({node:n})=>({...styleOf(n),parents:[n.parentElement,n.parentElement?.parentElement].filter(Boolean).map(styleOf),image:n.shadowRoot?.querySelector('img')?(()=>{const i=n.shadowRoot.querySelector('img');return {...styleOf(i),src:i.currentSrc||i.src,complete:i.complete,naturalWidth:i.naturalWidth,naturalHeight:i.naturalHeight}})():null}));
+      return {scrollX,scrollY,dpr:devicePixelRatio,innerWidth,innerHeight,rootAttrs:Object.fromEntries([...document.documentElement.attributes].map(x=>[x.name,x.value])),bodyAttrs:Object.fromEntries([...document.body.attributes].map(x=>[x.name,x.value])),fontStatus:document.fonts.status,fonts:[...document.fonts].map(f=>({family:f.family,status:f.status})),bundle:window.__afsCustomHtmlV1?Object.fromEntries(['version','sha256','state','t0','t1','ready','error'].filter(k=>window.__afsCustomHtmlV1[k]!==undefined).map(k=>[k,window.__afsCustomHtmlV1[k]])):null,nodes,media};
+    })}
+    paintDiagnostics={afterOriginalDisabled:await paintState()};
+    paintDiagnostics.settle=await page.evaluate(async()=>{
+      const fonts=await Promise.race([document.fonts.ready.then(()=>true),new Promise(r=>setTimeout(()=>r(false),3000))]);
+      const raf=await Promise.race([new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true)))),new Promise(r=>setTimeout(()=>r(false),3000))]);
+      return {fonts,raf};
+    });
+    await page.screenshot({path:path.join(out,`${name}-${variant}-top-settled-allow.png`),animations:'allow',timeout:60000});
+    paintDiagnostics.afterSettledAllow=await paintState();
+    await page.screenshot({path:path.join(out,`${name}-${variant}-top-settled-disabled.png`),animations:'disabled',timeout:60000});
+    paintDiagnostics.afterSettledDisabled=await paintState();
+    fs.writeFileSync(path.join(out,`${name}-${variant}-paint.json`),JSON.stringify(paintDiagnostics,null,2));
+  }
+
   await page.evaluate(()=>{window.__afsMutationCensus.callbacks=0;window.__afsMutationCensus.attributeRecords=0;window.__afsMutationCensus.totalRecords=0});
   await page.evaluate(()=>scrollTo({top:Math.round((document.scrollingElement.scrollHeight-innerHeight)*0.55),behavior:'instant'}));
   await page.waitForTimeout(6000);
@@ -164,7 +186,7 @@ async function visit(name,form,route,variant){
 
 try{
   outer: for(const [name,form,route] of cases){
-    const variants=runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
+    const variants=runtimeMatrix?(paintDiagnostic?['A','C','B']:['A','C','B','A2','C2','B2']):['A','B',...(['desktop-home','desktop-html'].includes(name)?['A2']:[])];
     for(const variant of variants){
       if((variant==='B'||variant==='B2')&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
       try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guardMarker:row.before.guardMarker,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,images:row.network.imageRequests,imageBytes:row.network.imageBytes,w300h300:row.network.w300h300,errors:row.errors.length,failed:row.failed.length}))}
@@ -190,4 +212,4 @@ for(const p of pairs){
 const summary={matrix:runtimeMatrix?'runtime':'parity',cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:cases.map(([name])=>({name,...Object.fromEntries((runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B','A2']).map(v=>[v,rows.find(r=>r.name===name&&r.variant===v)?.after?.mutationCensus]))})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
 fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
 console.log(JSON.stringify(summary));
-if(failures.length||rows.length!==(runtimeMatrix?cases.length*6:cases.length*2+2))process.exitCode=1;
+if(failures.length||rows.length!==(runtimeMatrix?cases.length*(paintDiagnostic?3:6):cases.length*2+2))process.exitCode=1;
