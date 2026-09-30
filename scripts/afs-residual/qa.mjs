@@ -15,9 +15,9 @@ const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 const oldBundle='afs-custom-html.7eb327015e626fd3.js';
 const oldRuntime='afs-site-runtime-v6.0.8-4f0da0796acfc010.txt';
 const placeholder='F0000000000000000000000000000000';
-const newBundleName='afs-custom-html.cf4656f21e4f0660.js';
+const newBundleName='afs-custom-html.f348acaf25672458.js';
 const newRuntimeName='afs-site-runtime-v6.0.8-164a55f93430de03.txt';
-const guardBundleName='afs-custom-html.9fa236ba491c8b98.js';
+const guardBundleName='afs-custom-html.da37965d685647a9.js';
 const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime';
 const paintDiagnostic=process.env.AFS_QA_PAINT_DIAGNOSTIC==='1';
 const newBundle=fs.readFileSync(path.join(here,newBundleName));
@@ -26,11 +26,11 @@ const guardBundle=runtimeMatrix?fs.readFileSync(path.join(here,guardBundleName))
 const guardStub=runtimeMatrix?fs.readFileSync(path.join(here,'Custom-HTML.guard-only.stub.PLACEHOLDER.html'),'utf8'):null;
 const tagPattern=/<script id="afs-custom-html-bundle"[^>]*><\/script>/g;
 const tagHits=[...newStub.matchAll(tagPattern)];
-if(tagHits.length!==1||sha(newBundle)!=='cf4656f21e4f0660d0e1fb43338d648a9eefccd3ecdc139abda38ea0a131f248')throw Error('candidate bundle/stub pin mismatch');
+if(tagHits.length!==1||sha(newBundle)!=='f348acaf256724583b39e118e5f76ad379bb845e49e848712e0f68164465556c')throw Error('candidate bundle/stub pin mismatch');
 const newTag=tagHits[0][0];
 if(!newTag.includes(newBundleName)||!newTag.includes(placeholder))throw Error('candidate tag does not match placeholder bundle');
 const guardTags=runtimeMatrix?[...guardStub.matchAll(tagPattern)]:[];
-if(runtimeMatrix&&(guardTags.length!==1||sha(guardBundle)!=='9fa236ba491c8b98f183cffc0d3c0a3c13a71f677f051da9faa61ed47850adff'))throw Error('guard-only bundle/stub pin mismatch');
+if(runtimeMatrix&&(guardTags.length!==1||sha(guardBundle)!=='da37965d685647a935ef7ad255fcddff53b432b004d5e5485146ee54b4ad5594'))throw Error('guard-only bundle/stub pin mismatch');
 const guardTag=runtimeMatrix?guardTags[0][0]:null;
 const cases=runtimeMatrix?[
   ['desktop-home','desktop','/'],['mobile-home','mobile','/']
@@ -166,7 +166,7 @@ async function visit(name,form,route,variant){
     runtimeA=browserBody;runtimeB=await buildRuntime(runtimeA);
     fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
   }
-  const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),guardMarker:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).includes('this._afs={}'),scrollHeight:document.scrollingElement.scrollHeight}));
+  const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),guardMarker:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).includes('q.get(this)!=o'),scrollHeight:document.scrollingElement.scrollHeight}));
   fs.writeFileSync(path.join(out,`${name}-${variant}-text.txt`),before.bodyText);
   before.bodyTextSha256=sha(Buffer.from(before.bodyText));before.bodyTextBytes=Buffer.byteLength(before.bodyText);delete before.bodyText;
   await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'allow',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
