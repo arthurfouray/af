@@ -56,6 +56,25 @@ async function buildRuntime(buf){
   return patched;
 }
 
+
+// A production field exists both in SSR and Cargo's hydration state. Change both,
+// or this is not a simulation of a real Cargo field release.
+function substituteCustomHtml(documentHtml, oldTag, newTag){
+  const fields=[...documentHtml.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)];
+  const slots=[...documentHtml.matchAll(/"custom_html"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+  if(fields.length!==1||slots.length!==1)throw Error('SSR/preloaded Custom HTML field count changed');
+  const field=fields[0][1];
+  if(JSON.parse(slots[0][1])!==field)throw Error('SSR and preloaded Custom HTML differ before substitution');
+  if(field.split(oldTag).length!==2)throw Error('Expected exactly one source bundle tag');
+  const updatedField=field.replace(oldTag,newTag);
+  const encoded=JSON.stringify(updatedField).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  let updated=documentHtml.replace(slots[0][1],()=>encoded).replace(oldTag,()=>newTag);
+  const afterField=[...updated.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)][0][1];
+  const afterSlot=[...updated.matchAll(/"custom_html"\s*:\s*("(?:\\.|[^"\\])*")/g)][0][1];
+  if(afterField!==updatedField||JSON.parse(afterSlot)!==updatedField)throw Error('SSR/preloaded substitution did not round-trip');
+  return updated;
+}
+
 function sanitizeHeaders(response){
   const h={...response.headers()};
   delete h['content-encoding'];delete h['content-length'];delete h['transfer-encoding'];
@@ -89,8 +108,8 @@ async function visit(name,form,route,variant){
       documentPin=sha(Buffer.from(body));
       if(documentPin!=='a89eba0a92e595af75183f9e1768c27e453c8d99f1dbeaa048b991f75dfe5d6f')throw Error('public homepage changed');
     }
-    if(combined)body=body.replace(tagPattern,newTag);
-    if(guardOnly)body=body.replace(tagPattern,guardTag);
+    if(combined)body=substituteCustomHtml(body,tags[0][0],newTag);
+    if(guardOnly)body=substituteCustomHtml(body,tags[0][0],guardTag);
     await r.fulfill({status:resp.status(),headers:sanitizeHeaders(resp),body});
   });
   if(combined){
@@ -150,16 +169,17 @@ async function visit(name,form,route,variant){
   const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),guardMarker:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).includes('this._afs={}'),scrollHeight:document.scrollingElement.scrollHeight}));
   fs.writeFileSync(path.join(out,`${name}-${variant}-text.txt`),before.bodyText);
   before.bodyTextSha256=sha(Buffer.from(before.bodyText));before.bodyTextBytes=Buffer.byteLength(before.bodyText);delete before.bodyText;
-  await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
+  await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'allow',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
   let paintDiagnostics=null;
-  if(paintDiagnostic){
+  {
     async function paintState(){return page.evaluate(()=>{
       const styleOf=n=>{const s=getComputedStyle(n),b=n.getBoundingClientRect();return {tag:n.tagName,id:n.id,classes:typeof n.className==='string'?n.className:'',attrs:Object.fromEntries([...n.attributes].map(x=>[x.name,x.value])),rect:{x:b.x,y:b.y,width:b.width,height:b.height},style:Object.fromEntries(['display','visibility','opacity','color','backgroundColor','filter','transform','mixBlendMode','overflow','clipPath','zIndex','pointerEvents','fontFamily','animationName','animationPlayState','transitionProperty'].map(k=>[k,s[k]]))}};
       const nodes=[...document.querySelectorAll('#tools,.nav-layer,[data-set-mode]')].slice(0,100).map(styleOf);
       const media=[...document.querySelectorAll('media-item')].map(n=>{const b=n.getBoundingClientRect();return {node:n,b}}).filter((x,i)=>i<12||x.b.y<innerHeight&&x.b.y+x.b.height>0).map(({node:n})=>({...styleOf(n),parents:[n.parentElement,n.parentElement?.parentElement].filter(Boolean).map(styleOf),image:n.shadowRoot?.querySelector('img')?(()=>{const i=n.shadowRoot.querySelector('img');return {...styleOf(i),src:i.currentSrc||i.src,complete:i.complete,naturalWidth:i.naturalWidth,naturalHeight:i.naturalHeight}})():null}));
       return {scrollX,scrollY,dpr:devicePixelRatio,innerWidth,innerHeight,rootAttrs:Object.fromEntries([...document.documentElement.attributes].map(x=>[x.name,x.value])),bodyAttrs:Object.fromEntries([...document.body.attributes].map(x=>[x.name,x.value])),fontStatus:document.fonts.status,fonts:[...document.fonts].map(f=>({family:f.family,status:f.status})),bundle:window.__afsCustomHtmlV1?Object.fromEntries(['version','sha256','state','t0','t1','ready','error'].filter(k=>window.__afsCustomHtmlV1[k]!==undefined).map(k=>[k,window.__afsCustomHtmlV1[k]])):null,nodes,media};
     })}
-    paintDiagnostics={afterOriginalDisabled:await paintState()};
+    paintDiagnostics={afterOriginalCapture:await paintState()};
+    if(paintDiagnostic){
     paintDiagnostics.settle=await page.evaluate(async()=>{
       const fonts=await Promise.race([document.fonts.ready.then(()=>true),new Promise(r=>setTimeout(()=>r(false),3000))]);
       const raf=await Promise.race([new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true)))),new Promise(r=>setTimeout(()=>r(false),3000))]);
@@ -169,6 +189,7 @@ async function visit(name,form,route,variant){
     paintDiagnostics.afterSettledAllow=await paintState();
     await page.screenshot({path:path.join(out,`${name}-${variant}-top-settled-disabled.png`),animations:'disabled',timeout:60000});
     paintDiagnostics.afterSettledDisabled=await paintState();
+    }
     fs.writeFileSync(path.join(out,`${name}-${variant}-paint.json`),JSON.stringify(paintDiagnostics,null,2));
   }
 
@@ -176,7 +197,7 @@ async function visit(name,form,route,variant){
   await page.evaluate(()=>scrollTo({top:Math.round((document.scrollingElement.scrollHeight-innerHeight)*0.55),behavior:'instant'}));
   await page.waitForTimeout(6000);
   const after=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,scrollY,scrollHeight:document.scrollingElement.scrollHeight,navLayers:document.querySelectorAll('.nav-layer').length,mediaItems:document.querySelectorAll('media-item').length,htmlTone:document.documentElement.getAttribute('data-nav-tone'),mutationCensus:{...window.__afsMutationCensus}}));
-  await page.screenshot({path:path.join(out,`${name}-${variant}-mid.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
+  await page.screenshot({path:path.join(out,`${name}-${variant}-mid.png`),animations:'allow',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
   const images=[...requests.values()].filter(x=>/freight\.cargo\.site\/.*\.(gif|png|jpe?g|webp|avif|svg)(\?|$)/i.test(x.url));
   const network={imageRequests:images.length,imageBytes:images.reduce((n,x)=>n+(x.bytes||0),0),w300h300:images.filter(x=>/\/w\/300\/h\/300\//.test(x.url)).length,failedImages:images.filter(x=>x.failed).length,images:images.map(x=>({url:x.url.replace('https://freight.cargo.site',''),bytes:x.bytes||0,status:x.status,failed:x.failed}))};
   const row={name,form,route,variant,documentPin,documentFieldSha,frontendBuild,navigation,bundleLoaded,runtimeLoaded,before,after,network,errors,failed};

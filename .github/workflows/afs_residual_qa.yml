@@ -26,7 +26,7 @@ jobs:
         working-directory: scripts/afs-residual
         env:
           AFS_QA_MATRIX: runtime
-          AFS_QA_PAINT_DIAGNOSTIC: '1'
+          AFS_QA_PAINT_DIAGNOSTIC: '0'
         run: node qa.mjs "$GITHUB_WORKSPACE/afs-residual-qa"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
