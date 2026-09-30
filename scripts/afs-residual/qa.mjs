@@ -70,16 +70,23 @@ async function visit(name,form,route,variant){
     const count=window.__afsMutationCensus={callbacks:0,attributeRecords:0,totalRecords:0};
     window.MutationObserver=class extends old{constructor(cb){super((records,observer)=>{count.callbacks++;count.totalRecords+=records.length;count.attributeRecords+=records.filter(r=>r.type==='attributes').length;return cb(records,observer)})}};
   });
-  let documentPin=null,bundleLoaded=false,runtimeLoaded=false;
+  let documentPin=null,documentFieldSha=null,frontendBuild=null,bundleLoaded=false,runtimeLoaded=false;
   const errors=[],failed=[];
   await ctx.route('https://arthurfouray.systems/**',async r=>{
     if(r.request().resourceType()!=='document')return r.continue();
     const resp=await r.fetch();let body=await resp.text();
     const tags=[...body.matchAll(tagPattern)];
+    const fields=[...body.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)];
+    if(fields.length!==1)throw Error('customhtml count changed');
+    documentFieldSha=sha(Buffer.from(fields[0][1]));
+    if(documentFieldSha!=='d3ce518f02ef39cc56a8ccf6de78a871fc657fa622a302ac2058dc7024f72aef')throw Error('public Custom HTML field changed');
+    const builds=[...body.matchAll(/https:\/\/build\.cargo\.site\/frontend\/([^/]+)\/index\.(?:js|css)/g)].map(x=>x[1]);
+    if(builds.length!==2||builds.some(x=>x!=='b8c0c2'))throw Error('Cargo frontend changed during the test');
+    frontendBuild=builds[0];
     if(tags.length!==1||!tags[0][0].includes(oldBundle))throw Error('live document bundle tag changed');
     if(new URL(r.request().url()).pathname==='/'&&new URL(r.request().url()).search===''){
       documentPin=sha(Buffer.from(body));
-      if(documentPin!=='8823ffd20a7bbad6523e7db616ff5a98c79e2b245288d6ab83e50d311c2555b0')throw Error('public homepage changed');
+      if(documentPin!=='a89eba0a92e595af75183f9e1768c27e453c8d99f1dbeaa048b991f75dfe5d6f')throw Error('public homepage changed');
     }
     if(combined)body=body.replace(tagPattern,newTag);
     if(guardOnly)body=body.replace(tagPattern,guardTag);
@@ -150,7 +157,7 @@ async function visit(name,form,route,variant){
   await page.screenshot({path:path.join(out,`${name}-${variant}-mid.png`),animations:'disabled',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
   const images=[...requests.values()].filter(x=>/freight\.cargo\.site\/.*\.(gif|png|jpe?g|webp|avif|svg)(\?|$)/i.test(x.url));
   const network={imageRequests:images.length,imageBytes:images.reduce((n,x)=>n+(x.bytes||0),0),w300h300:images.filter(x=>/\/w\/300\/h\/300\//.test(x.url)).length,failedImages:images.filter(x=>x.failed).length,images:images.map(x=>({url:x.url.replace('https://freight.cargo.site',''),bytes:x.bytes||0,status:x.status,failed:x.failed}))};
-  const row={name,form,route,variant,documentPin,navigation,bundleLoaded,runtimeLoaded,before,after,network,errors,failed};
+  const row={name,form,route,variant,documentPin,documentFieldSha,frontendBuild,navigation,bundleLoaded,runtimeLoaded,before,after,network,errors,failed};
   await ctx.close();
   return row;
 }
