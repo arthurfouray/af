@@ -1,0 +1,310 @@
+// Read-only public-site A/B. B substitutes the prepared bundle and runtime only
+// inside this browser context; it does not write Freight, Cargo, or production.
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {chromium} from 'playwright-core';
+
+const here=path.dirname(fileURLToPath(import.meta.url));
+const out=process.argv[2]||path.join(process.cwd(),'afs-residual-qa');
+fs.mkdirSync(out,{recursive:true});
+const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+const oldBundle='afs-custom-html.7eb327015e626fd3.js';
+const oldRuntime='afs-site-runtime-v6.0.8-4f0da0796acfc010.txt';
+const placeholder='F0000000000000000000000000000000';
+const newBundleName='afs-custom-html.f348acaf25672458.js';
+const newRuntimeName='afs-site-runtime-v6.0.8-164a55f93430de03.txt';
+const guardBundleName='afs-custom-html.da37965d685647a9.js';
+const singleCapMatrix=true;
+const originalCapName="afs-img-width-cap.69ed638f033b9d36.js",newCapName="afs-img-width-cap.0c287fee79c5c699.js";
+const originalCap=fs.readFileSync(path.join(here,originalCapName)),newCap=fs.readFileSync(path.join(here,newCapName));
+const capStub=fs.readFileSync(path.join(here,'Custom-HTML.single-cap.stub.PLACEHOLDER.html'),'utf8'),capRuntimeStub=fs.readFileSync(path.join(here,'Custom-HTML.first-combined.stub.PLACEHOLDER.html'),'utf8');
+if(sha(originalCap)!=="69ed638f033b9d3611f9c04eacde62c615556df20854c240acf34825c8d84164"||sha(newCap)!=="0c287fee79c5c69966b0dbe2123b01846d528056593e50954c552d6518dfdf3b")throw Error('Single width-cap source mismatch');
+const capTagPattern=/<script id="afs-img-width-cap"[^>]*><\/script>/g;
+const syncMatrix=true;
+const syncBundleName="afs-custom-html.6b1c760cb96688bd.js",metaBundleName="afs-custom-html.204c16bb0ce36ebf.js",metaRuntimeName="afs-site-runtime-v6.0.8-35657591039eb7b0.txt";
+const syncBundle=fs.readFileSync(path.join(here,syncBundleName)),metaBundle=fs.readFileSync(path.join(here,metaBundleName)),metaRuntime=fs.readFileSync(path.join(here,metaRuntimeName));
+const syncStub=fs.readFileSync(path.join(here,'Custom-HTML.gif-synchronous.stub.PLACEHOLDER.html'),'utf8'),metaStub=fs.readFileSync(path.join(here,'Custom-HTML.first-runtime.stub.PLACEHOLDER.html'),'utf8');
+const gifMap=JSON.parse(fs.readFileSync(path.join(here,'canonical-gif-map.json'),'utf8'));
+const gifUrls=new Set(Object.values(gifMap).flatMap(x=>[x.thumbnailUrl,x.canonicalUrl]));let gifProof=JSON.parse(fs.readFileSync(path.join(here,'current-gif-proof.json'),'utf8'));if(!gifProof.accepted||sha(fs.readFileSync(path.join(here,'current-gif-proof.json')))!=="78fb68a85d61fa6d40b5de41bd12008ad5e57ae3da46872073fde9b9f8308470")throw Error('Nine source-bound GIF identity proof missing');
+if(sha(syncBundle)!=="6b1c760cb96688bdc240c9fc3df51cbf3c23706985e20893a8e2870a8ce187f4"||sha(metaBundle)!=="204c16bb0ce36ebfbb4bbe1443581b5e5b221723329234a7fcfccda0ba1bebe3"||sha(metaRuntime)!=="35657591039eb7b01814e8de65acfb849da5ca864f5f28f01f4c14fc9b859f38")throw Error('Synchronous candidate pin mismatch');
+const noopMatrix=process.env.AFS_QA_MATRIX==='paint-control';
+const lateGuardName="afs-custom-html.b1dfc4e68282f59d.js";
+const lateGuardBundle=fs.readFileSync(path.join(here,lateGuardName));
+const lateGuardStub=fs.readFileSync(path.join(here,'Custom-HTML.late-guard.stub.PLACEHOLDER.html'),'utf8');
+if(sha(lateGuardBundle)!=="b1dfc4e68282f59dc092a0ed9b8cae46384bcedc0eec6bc76fa8c0b608b972b7")throw Error('Late guard source mismatch');
+const runtimeMatrix=process.env.AFS_QA_MATRIX==='runtime'||noopMatrix;
+const noopBundle=fs.readFileSync(path.join(here,oldBundle));
+const runtimeOnlyName='afs-custom-html.aea5e9cf36008686.js';
+const runtimeOnlyBundle=fs.readFileSync(path.join(here,runtimeOnlyName));
+const noopStub=fs.readFileSync(path.join(here,'Custom-HTML.noop.stub.PLACEHOLDER.html'),'utf8');
+const runtimeOnlyStub=fs.readFileSync(path.join(here,'Custom-HTML.runtime-only.stub.PLACEHOLDER.html'),'utf8');
+if(sha(noopBundle)!=='7eb327015e626fd36e1b5ed824faec6e5dbe6bb9fefe5fd5b9f2a10608845d18'||sha(runtimeOnlyBundle)!=='aea5e9cf360086863ebac714add32a1100d764e18c966b31143f8a6e911f04ef')throw Error('No-op/runtime-only base mismatch');
+const paintDiagnostic=process.env.AFS_QA_PAINT_DIAGNOSTIC==='1';
+const newBundle=fs.readFileSync(path.join(here,newBundleName));
+const newStub=fs.readFileSync(path.join(here,'Custom-HTML.stub.PLACEHOLDER.html'),'utf8');
+const guardBundle=runtimeMatrix?fs.readFileSync(path.join(here,guardBundleName)):null;
+const guardStub=runtimeMatrix?fs.readFileSync(path.join(here,'Custom-HTML.guard-only.stub.PLACEHOLDER.html'),'utf8'):null;
+const tagPattern=/<script id="afs-custom-html-bundle"[^>]*><\/script>/g;
+const tagHits=[...newStub.matchAll(tagPattern)];
+if(tagHits.length!==1||sha(newBundle)!=='f348acaf256724583b39e118e5f76ad379bb845e49e848712e0f68164465556c')throw Error('candidate bundle/stub pin mismatch');
+const newTag=tagHits[0][0];
+if(!newTag.includes(newBundleName)||!newTag.includes(placeholder))throw Error('candidate tag does not match placeholder bundle');
+const guardTags=runtimeMatrix?[...guardStub.matchAll(tagPattern)]:[];
+if(runtimeMatrix&&(guardTags.length!==1||sha(guardBundle)!=='da37965d685647a935ef7ad255fcddff53b432b004d5e5485146ee54b4ad5594'))throw Error('guard-only bundle/stub pin mismatch');
+const guardTag=runtimeMatrix?guardTags[0][0]:null;
+const cases=[['mobile-before-arts','mobile','/before-arts']];
+const profiles={desktop:{viewport:{width:1350,height:940},deviceScaleFactor:1},mobile:{viewport:{width:412,height:823},deviceScaleFactor:1.75,isMobile:true,hasTouch:true}};
+const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+const rows=[];let runtimeA=null,runtimeB=null;
+const runtimeReplies=[];
+
+async function buildRuntime(buf){
+  if(buf.length!==407172||sha(buf)!=='4f0da0796acfc010018a9fcf7ea04fea314e707a00c24bf56100b43d10b9557e')throw Error(`live runtime changed; observed bytes=${buf.length} sha256=${sha(buf)}; cannot patch this base`);
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'afs-runtime-'));
+  const a=path.join(dir,'runtime-a.txt'),b=path.join(dir,'runtime-b.txt');
+  fs.writeFileSync(a,buf);
+  const x=spawnSync('python3',[path.join(here,'make-idempotent.py'),a,b],{encoding:'utf8'});
+  if(x.status!==0)throw Error('runtime patch failed: '+(x.stderr||x.stdout).slice(0,300));
+  const patched=fs.readFileSync(b);
+  if(patched.length!==407333||sha(patched)!=='164a55f93430de03dadecdecd03512460479c2044d893f4b5b8ed4b1eddeda0f')throw Error('patched runtime pin mismatch');
+  return patched;
+}
+
+
+// A production field exists both in SSR and Cargo's hydration state. Change both,
+// or this is not a simulation of a real Cargo field release.
+function substituteCustomHtml(documentHtml, oldTag, newTag){
+  const fields=[...documentHtml.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)];
+  const slots=[...documentHtml.matchAll(/"custom_html"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+  if(fields.length!==1||slots.length!==1)throw Error('SSR/preloaded Custom HTML field count changed');
+  const field=fields[0][1];
+  if(JSON.parse(slots[0][1])!==field)throw Error('SSR and preloaded Custom HTML differ before substitution');
+  if(field.split(oldTag).length!==2)throw Error('Expected exactly one source bundle tag');
+  const updatedField=field.replace(oldTag,newTag);
+  const encoded=JSON.stringify(updatedField).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
+  let updated=documentHtml.replace(slots[0][1],()=>encoded).replace(oldTag,()=>newTag);
+  const afterField=[...updated.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)][0][1];
+  const afterSlot=[...updated.matchAll(/"custom_html"\s*:\s*("(?:\\.|[^"\\])*")/g)][0][1];
+  if(afterField!==updatedField||JSON.parse(afterSlot)!==updatedField)throw Error('SSR/preloaded substitution did not round-trip');
+  return updated;
+}
+
+function sanitizeHeaders(response){
+  const h={...response.headers()};
+  delete h['content-encoding'];delete h['content-length'];delete h['transfer-encoding'];
+  return h;
+}
+
+async function visit(name,form,route,variant){
+  const combined=variant==='B'||variant==='B2';
+  const runtimeOnly=variant==='D';
+  const noop=variant==='E'||variant==='F';
+  const runtimeNoop=variant==='F';
+  const lateGuard=variant==='L';
+  const capLocal=variant==='V'||variant==='W'||variant==='T'||variant==='Y',capCandidate=variant==='W'||variant==='Y';
+  const gifSync=variant==='G',metadata=variant==='T'||variant==='Y';
+  if(gifSync&&!gifProof?.accepted)throw Error('Live GIF transform identity proof not accepted; synchronous alias test held');
+  const gifReplies=[];
+  const guardOnly=variant==='C'||variant==='C2';
+  const ctx=await browser.newContext(profiles[form]);
+  await ctx.addInitScript(()=>{
+    const old=window.MutationObserver;
+    const count=window.__afsMutationCensus={callbacks:0,attributeRecords:0,totalRecords:0};
+    window.MutationObserver=class extends old{constructor(cb){super((records,observer)=>{count.callbacks++;count.totalRecords+=records.length;count.attributeRecords+=records.filter(r=>r.type==='attributes').length;return cb(records,observer)})}};
+  });
+  let documentPin=null,documentFieldSha=null,frontendBuild=null,bundleLoaded=false,runtimeLoaded=false;
+  const errors=[],failed=[];
+  const localAssets=new Map;
+  if(capLocal)localAssets.set(capCandidate?newCapName:originalCapName,{body:capCandidate?newCap:originalCap,type:'application/javascript; charset=utf-8',kind:'cap'});
+  if(metadata){localAssets.set(metaBundleName,{body:metaBundle,type:'application/javascript; charset=utf-8',kind:'bundle'});localAssets.set(metaRuntimeName,{body:metaRuntime,type:'text/plain; charset=utf-8',kind:'runtime'});}
+  const page=await ctx.newPage();
+  if(variant==='A'&&!gifProof)page.on('response',r=>{if(gifUrls.has(r.url()))gifReplies.push(r.body().then(buf=>({url:r.url(),status:r.status(),contentType:r.headers()['content-type'],bytes:buf.length,sha256:sha(buf),header:buf.subarray(0,6).toString('ascii'),width:buf.length>=10?buf.readUInt16LE(6):null,height:buf.length>=10?buf.readUInt16LE(8):null})).catch(e=>({url:r.url(),status:r.status(),error:String(e)})))});
+  const cdp=await ctx.newCDPSession(page);
+  await cdp.send('Network.enable');
+  // No Playwright route, cache override or global cache manipulation.
+  const intercepted=[], interceptionErrors=[], pending=new Set;
+  const patterns=[{urlPattern:"https://arthurfouray.systems/*",resourceType:"Document",requestStage:"Response"},...Array.from(localAssets.keys(),name=>({urlPattern:"https://freight.cargo.site/m/*/"+name,requestStage:"Request"}))];
+  cdp.on("Fetch.requestPaused",e=>{const operation=(async()=>{
+    if(e.responseStatusCode!==undefined){
+      if(e.responseStatusCode!==200)throw Error("Public document HTTP "+e.responseStatusCode+"; no denial retry");
+      const received=await cdp.send("Fetch.getResponseBody",{requestId:e.requestId});
+      let body=Buffer.from(received.body,received.base64Encoded?"base64":"utf8").toString("utf8");
+    const tags=[...body.matchAll(tagPattern)];
+    const fields=[...body.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)];
+    if(fields.length!==1)throw Error('customhtml count changed');
+    documentFieldSha=sha(Buffer.from(fields[0][1]));
+    if(documentFieldSha!=='d3ce518f02ef39cc56a8ccf6de78a871fc657fa622a302ac2058dc7024f72aef')throw Error('public Custom HTML field changed');
+    const builds=[...body.matchAll(/https:\/\/build\.cargo\.site\/frontend\/([^/]+)\/index\.(?:js|css)/g)].map(x=>x[1]);
+    if(builds.length!==2||builds.some(x=>x!=='b8c0c2'))throw Error('Cargo frontend changed during the test');
+    frontendBuild=builds[0];
+    if(tags.length!==1||!tags[0][0].includes(oldBundle))throw Error('live document bundle tag changed');
+    if(new URL(e.request.url).pathname==='/'&&new URL(e.request.url).search===''){
+      documentPin=sha(Buffer.from(body));
+      if(documentPin!=='a89eba0a92e595af75183f9e1768c27e453c8d99f1dbeaa048b991f75dfe5d6f')throw Error('public homepage changed');
+    }
+    if(combined)body=substituteCustomHtml(body,tags[0][0],newTag);
+    if(guardOnly)body=substituteCustomHtml(body,tags[0][0],guardTag);
+    if(runtimeOnly)body=substituteCustomHtml(body,tags[0][0],[...runtimeOnlyStub.matchAll(tagPattern)][0][0]);
+    if(noop)body=substituteCustomHtml(body,tags[0][0],[...noopStub.matchAll(tagPattern)][0][0]);
+    if(lateGuard)body=substituteCustomHtml(body,tags[0][0],[...lateGuardStub.matchAll(tagPattern)][0][0]);
+    if(gifSync)body=substituteCustomHtml(body,tags[0][0],[...syncStub.matchAll(tagPattern)][0][0]);
+    if(metadata)body=substituteCustomHtml(body,tags[0][0],[...metaStub.matchAll(tagPattern)][0][0]);
+    if(capCandidate){const oldCap=[...fields[0][1].matchAll(capTagPattern)];if(oldCap.length!==1||!oldCap[0][0].includes(originalCapName))throw Error('Current width-cap binding changed');body=substituteCustomHtml(body,oldCap[0][0],[...capStub.matchAll(capTagPattern)][0][0]);}
+    if(capCandidate){const f=[...body.matchAll(/<customhtml\b[^>]*>([\s\S]*?)<\/customhtml>/gi)][0][1];if(f!==(metadata?capRuntimeStub:capStub))throw Error('Actual candidate field differs from exact prepared stub');}
+      const headers=(e.responseHeaders||[]).filter(x=>!['content-encoding','content-length','transfer-encoding'].includes(x.name.toLowerCase()));
+      intercepted.push({kind:'document',url:e.request.url,sourcePin:documentPin,fieldSha:documentFieldSha,servedSha:sha(Buffer.from(body)),bytes:Buffer.byteLength(body)});
+      await cdp.send('Fetch.fulfillRequest',{requestId:e.requestId,responseCode:200,responseHeaders:headers,body:Buffer.from(body).toString('base64')});
+    }else{
+      const name=new URL(e.request.url).pathname.split('/').at(-1),asset=localAssets.get(name);
+      if(!asset)throw Error('Unexpected candidate URL interception');
+      if(asset.kind==='bundle')bundleLoaded=true;if(asset.kind==='runtime')runtimeLoaded=true;
+      intercepted.push({kind:asset.kind,url:e.request.url,bytes:asset.body.length,sha256:sha(asset.body)});
+      await cdp.send('Fetch.fulfillRequest',{requestId:e.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:asset.type},{name:'Access-Control-Allow-Origin',value:'*'},{name:'Cache-Control',value:'public, max-age=31536000, immutable'}],body:asset.body.toString('base64')});
+    }
+  })().catch(async error=>{interceptionErrors.push(String(error));try{await cdp.send('Fetch.failRequest',{requestId:e.requestId,errorReason:'Aborted'})}catch{}});pending.add(operation);operation.finally(()=>pending.delete(operation));});
+  await cdp.send('Fetch.enable',{patterns});
+  const requests=new Map();
+  cdp.on('Network.requestWillBeSent',e=>requests.set(e.requestId,{url:e.request.url,type:e.type}));
+  cdp.on('Network.responseReceived',e=>{const x=requests.get(e.requestId);if(x){x.status=e.response.status;x.fromDiskCache=!!e.response.fromDiskCache;x.fromServiceWorker=!!e.response.fromServiceWorker}});
+  cdp.on('Network.requestServedFromCache',e=>{const x=requests.get(e.requestId);if(x)x.cacheHit=true});
+  cdp.on('Network.loadingFinished',e=>{const x=requests.get(e.requestId);if(x)x.bytes=e.encodedDataLength});
+  cdp.on('Network.loadingFailed',e=>{const x=requests.get(e.requestId);if(x)x.failed=e.errorText});
+  page.on('pageerror',e=>errors.push(String(e).slice(0,300)));
+  page.on('requestfailed',r=>failed.push({url:r.url().slice(0,180),failure:r.failure()?.errorText}));
+  if(variant==='A'&&!runtimeA)page.on('response',r=>{
+    if(r.url().includes('/'+oldRuntime))runtimeReplies.push(r.body().then(b=>({status:r.status(),body:b,url:r.url(),contentType:r.headers()['content-type']})).catch(e=>({error:String(e)})));
+  });
+  let navigation=null;
+  try{await page.goto('https://arthurfouray.systems'+route,{waitUntil:'load',timeout:120000})}catch(e){navigation=String(e).slice(0,300)}
+  await page.waitForTimeout(12000);
+  if(variant==='A'&&!runtimeA){
+    const replies=await Promise.all(runtimeReplies);
+    const good=replies.find(r=>r.status===200&&r.body);
+    if(!good)throw Error('published runtime response not captured: '+JSON.stringify(replies.map(r=>({status:r.status,error:r.error,url:r.url}))));
+    const browserProbe=await page.evaluate(async url=>{
+      const root=document.documentElement;
+      const loader={state:root.dataset.afsRuntimeLoader,error:root.dataset.afsRuntimeLoaderError,resourceState:root.dataset.afsRuntimeResourceState,resourceError:root.dataset.afsRuntimeResourceError};
+      try{
+        const response=await fetch(url,{credentials:'omit',cache:'force-cache',redirect:'error'});
+        const bytes=new Uint8Array(await response.arrayBuffer());
+        const chunks=[];for(let i=0;i<bytes.length;i+=8192)chunks.push(String.fromCharCode(...bytes.slice(i,i+8192)));
+        return {status:response.status,contentType:response.headers.get('content-type'),bytes:bytes.length,base64:btoa(chunks.join('')),loader};
+      }catch(e){return {error:String(e),loader}}
+    },good.url);
+    const browserBody=browserProbe.base64?Buffer.from(browserProbe.base64,'base64'):null;
+    fs.writeFileSync(path.join(out,'runtime-source-observation.json'),JSON.stringify({status:good.status,url:good.url,contentType:good.contentType,playwrightBytes:good.body.length,playwrightSha256:sha(good.body),browserStatus:browserProbe.status,browserContentType:browserProbe.contentType,browserBytes:browserBody?.length,browserSha256:browserBody&&sha(browserBody),browserError:browserProbe.error,loader:browserProbe.loader},null,2));
+    fs.writeFileSync(path.join(out,'runtime-served-for-diff.txt'),good.body);
+    if(!browserBody)throw Error('in-page runtime fetch failed: '+browserProbe.error);
+    runtimeA=browserBody;runtimeB=metaRuntime;
+    fs.writeFileSync(path.join(out,'runtime-pins.json'),JSON.stringify({sourceBytes:runtimeA.length,sourceSha256:sha(runtimeA),patchedBytes:runtimeB.length,patchedSha256:sha(runtimeB),sourceUrl:good.url},null,2));
+  }
+  if(interceptionErrors.length)throw Error('Fail-closed interception: '+interceptionErrors.join('; '));
+  const before=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,title:document.title,bodyText:document.body?.innerText||'',pages:document.querySelectorAll('.page').length,mediaItems:document.querySelectorAll('media-item').length,navLayers:document.querySelectorAll('.nav-layer').length,srcSetterSource:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).slice(0,2000),guardActive:!/\[native code\]/.test(String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set)),motion:matchMedia('(prefers-reduced-motion: reduce)').matches?'reduce':'no-preference',guardMarker:String(Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src').set).includes('q.get(this)!=o'),scrollHeight:document.scrollingElement.scrollHeight}));
+  fs.writeFileSync(path.join(out,`${name}-${variant}-text.txt`),before.bodyText);
+  before.bodyTextSha256=sha(Buffer.from(before.bodyText));before.bodyTextBytes=Buffer.byteLength(before.bodyText);delete before.bodyText;
+  await page.screenshot({path:path.join(out,`${name}-${variant}-top.png`),animations:'allow',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
+  let paintDiagnostics=null;
+  {
+    async function paintState(){return page.evaluate(()=>{
+      const styleOf=n=>{const s=getComputedStyle(n),b=n.getBoundingClientRect();return {tag:n.tagName,id:n.id,classes:typeof n.className==='string'?n.className:'',attrs:Object.fromEntries([...n.attributes].map(x=>[x.name,x.value])),rect:{x:b.x,y:b.y,width:b.width,height:b.height},style:Object.fromEntries(['display','visibility','opacity','color','backgroundColor','filter','transform','mixBlendMode','overflow','clipPath','zIndex','pointerEvents','fontFamily','animationName','animationPlayState','transitionProperty'].map(k=>[k,s[k]]))}};
+      const nodes=[...document.querySelectorAll('#tools,.nav-layer,[data-set-mode]')].slice(0,100).map(styleOf);
+      const media=[...document.querySelectorAll('media-item')].map(n=>{const b=n.getBoundingClientRect();return {node:n,b}}).filter((x,i)=>i<12||x.b.y<innerHeight&&x.b.y+x.b.height>0).map(({node:n})=>({...styleOf(n),parents:[n.parentElement,n.parentElement?.parentElement].filter(Boolean).map(styleOf),image:n.shadowRoot?.querySelector('img')?(()=>{const i=n.shadowRoot.querySelector('img');return {...styleOf(i),src:i.currentSrc||i.src,complete:i.complete,naturalWidth:i.naturalWidth,naturalHeight:i.naturalHeight}})():null}));
+      return {scrollX,scrollY,dpr:devicePixelRatio,innerWidth,innerHeight,rootAttrs:Object.fromEntries([...document.documentElement.attributes].map(x=>[x.name,x.value])),bodyAttrs:Object.fromEntries([...document.body.attributes].map(x=>[x.name,x.value])),fontStatus:document.fonts.status,fonts:[...document.fonts].map(f=>({family:f.family,status:f.status})),bundle:window.__afsCustomHtmlV1?Object.fromEntries(['version','sha256','state','t0','t1','ready','error'].filter(k=>window.__afsCustomHtmlV1[k]!==undefined).map(k=>[k,window.__afsCustomHtmlV1[k]])):null,nodes,media};
+    })}
+    paintDiagnostics={afterOriginalCapture:await paintState()};
+    if(paintDiagnostic){
+    paintDiagnostics.settle=await page.evaluate(async()=>{
+      const fonts=await Promise.race([document.fonts.ready.then(()=>true),new Promise(r=>setTimeout(()=>r(false),3000))]);
+      const raf=await Promise.race([new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true)))),new Promise(r=>setTimeout(()=>r(false),3000))]);
+      return {fonts,raf};
+    });
+    await page.screenshot({path:path.join(out,`${name}-${variant}-top-settled-allow.png`),animations:'allow',timeout:60000});
+    paintDiagnostics.afterSettledAllow=await paintState();
+    await page.screenshot({path:path.join(out,`${name}-${variant}-top-settled-disabled.png`),animations:'disabled',timeout:60000});
+    paintDiagnostics.afterSettledDisabled=await paintState();
+    }
+    fs.writeFileSync(path.join(out,`${name}-${variant}-paint.json`),JSON.stringify(paintDiagnostics,null,2));
+  }
+
+  await page.evaluate(()=>{window.__afsMutationCensus.callbacks=0;window.__afsMutationCensus.attributeRecords=0;window.__afsMutationCensus.totalRecords=0});
+  await page.evaluate(()=>scrollTo({top:Math.round((document.scrollingElement.scrollHeight-innerHeight)*0.55),behavior:'instant'}));
+  await page.waitForTimeout(6000);
+  const after=await page.evaluate(()=>({mode:document.documentElement.dataset.mode,scrollY,scrollHeight:document.scrollingElement.scrollHeight,navLayers:document.querySelectorAll('.nav-layer').length,mediaItems:document.querySelectorAll('media-item').length,htmlTone:document.documentElement.getAttribute('data-nav-tone'),mutationCensus:{...window.__afsMutationCensus}}));
+  await page.screenshot({path:path.join(out,`${name}-${variant}-mid.png`),animations:'allow',timeout:60000}).catch(e=>errors.push('screenshot: '+String(e).slice(0,200)));
+  const images=[...requests.values()].filter(x=>/freight\.cargo\.site\/.*\.(gif|png|jpe?g|webp|avif|svg)(\?|$)/i.test(x.url));
+  const network={imageRequests:images.length,imageBytes:images.reduce((n,x)=>n+(x.bytes||0),0),w300h300:images.filter(x=>/\/w\/300\/h\/300\//.test(x.url)).length,failedImages:images.filter(x=>x.failed).length,cachePolicy:"browser-default-no-route",imageCacheHits:images.filter(x=>x.cacheHit||x.fromDiskCache).length,images:images.map(x=>({url:x.url.replace('https://freight.cargo.site',''),bytes:x.bytes||0,status:x.status,failed:x.failed,cacheHit:x.cacheHit||x.fromDiskCache||false}))};
+  const capSourceVerified=await page.evaluate(({name})=>!!document.querySelector('script#afs-img-width-cap')?.src.endsWith('/'+name),{name:capCandidate?newCapName:originalCapName});
+  const row={intercepted,interceptionErrors,cacheProtocol:'CDP Fetch narrow patterns; no context.route / cache override',capSourceVerified,name,form,route,variant,documentPin,documentFieldSha,frontendBuild,navigation,bundleLoaded,runtimeLoaded,before,after,network,errors,failed};
+  if(variant==='A'&&!gifProof){
+    // Source-identity probes happen after the measured screenshot/network/scroll
+    // snapshots. They are not added to any byte-delta or work-count scenario.
+    const initial=await Promise.all(gifReplies);
+    const denied=initial.filter(x=>[401,403,429].includes(x.status));
+    const missing=[...gifUrls].filter(url=>!initial.some(x=>x.url===url));
+    let probes=[];
+    if(!denied.length&&missing.length)probes=await page.evaluate(async urls=>Promise.all(urls.map(url=>new Promise(resolve=>{const image=new Image;let done=false;const end=state=>{if(done)return;done=true;resolve({url,state})};image.onload=()=>end('loaded');image.onerror=()=>end('error');image.src=url;setTimeout(()=>end('timeout'),15000)}))),missing);
+    const responses=await Promise.all(gifReplies);
+    const assets=Object.entries(gifMap).map(([hash,item])=>{const a=responses.find(x=>x.url===item.thumbnailUrl&&x.status===200&&!x.error),b=responses.find(x=>x.url===item.canonicalUrl&&x.status===200&&!x.error);return {hash,...item,thumbnail:a,canonical:b,exactBodyIdentity:!!a&&!!b&&a.sha256===b.sha256&&a.sha256===item.originalSha256&&a.bytes===item.originalBytes&&b.bytes===item.originalBytes&&a.header.startsWith('GIF')&&b.header.startsWith('GIF')}});
+    gifProof={sourceHomePin:documentPin,sourceFieldSha:documentFieldSha,cargoFrontend:frontendBuild,scope:'Outside measured window; normal browser GIF responses, no denial retry; current transform/source byte identity',accepted:assets.length===9&&assets.every(x=>x.exactBodyIdentity)&&!denied.length,assets,denied,probes,responses};
+    fs.writeFileSync(path.join(out,'gif-transform-identity.json'),JSON.stringify(gifProof,null,2));
+  }
+  // Cache qualification is outside the measured image/scroll window.
+  const reuseUrl=images.find(x=>x.status===200&&/\.(gif|png|jpe?g)$/i.test(x.url))?.url;
+  const priorRequests=requests.size;
+  const cacheProbe=reuseUrl?await page.evaluate(async url=>{const before=performance.getEntriesByName(url).length;const result=await new Promise(resolve=>{const i=new Image;i.onload=()=>resolve({loaded:true,naturalWidth:i.naturalWidth,naturalHeight:i.naturalHeight});i.onerror=()=>resolve({loaded:false});i.src=url;setTimeout(()=>resolve({timeout:true}),10000)});return {...result,url,resourceTimings:performance.getEntriesByName(url).slice(before).map(x=>({transferSize:x.transferSize,encodedBodySize:x.encodedBodySize,decodedBodySize:x.decodedBodySize}))}},reuseUrl):null;
+  await page.waitForTimeout(500);
+  row.cacheProbe={...cacheProbe,additionalRequests:[...requests.values()].slice(priorRequests).map(x=>({url:x.url,bytes:x.bytes||0,status:x.status,cacheHit:x.cacheHit||x.fromDiskCache||false}))};
+  const modeStates=[];
+  await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));await page.waitForTimeout(1500);
+  for(const mode of ['systems','clean','img','card','html']){
+    try{
+      const selector='#tools [data-set-mode="'+mode+'"]';await page.locator(selector).click({timeout:15000});
+      await page.waitForFunction(m=>document.querySelector('#tools [data-set-mode="'+m+'"]')?.getAttribute('aria-pressed')==='true',mode,{timeout:15000});
+      await page.waitForTimeout(1500);
+      if(mode==='clean'){const early=await page.evaluate(()=>({text:document.body.innerText,footerPages:[...document.querySelectorAll('.page')].map(p=>({id:p.id,display:getComputedStyle(p).display})),scrollHeight:document.scrollingElement.scrollHeight}));fs.writeFileSync(path.join(out,`${name}-${variant}-clean-early.json`),JSON.stringify(early,null,2));await page.waitForTimeout(12000);}
+      const state=await page.evaluate(()=>({url:location.href,root:Object.fromEntries([...document.documentElement.attributes].map(a=>[a.name,a.value])),selected:[...document.querySelectorAll('#tools [data-set-mode]')].filter(b=>b.getAttribute('aria-pressed')==='true').map(b=>b.dataset.setMode),title:document.title,toolsRect:(()=>{const b=document.querySelector('#tools').getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}})(),text:document.body.innerText}));
+      if(state.selected.length!==1||state.selected[0]!==mode)throw Error('Mode selected state mismatch');
+      fs.writeFileSync(path.join(out,`${name}-${variant}-mode-${mode}-text.txt`),state.text);delete state.text;
+      await page.screenshot({path:path.join(out,`${name}-${variant}-mode-${mode}.png`),animations:'allow',timeout:60000});modeStates.push({mode,status:'PASS',...state});
+    }catch(e){modeStates.push({mode,status:'FAIL',error:String(e).slice(0,500)});break}
+  }
+  row.modeStates=modeStates;fs.writeFileSync(path.join(out,`${name}-${variant}-modes.json`),JSON.stringify(modeStates,null,2));
+  await Promise.allSettled([...pending]);
+  await ctx.close();
+  return row;
+}
+
+try{
+  outer: for(const [name,form,route] of cases){
+    const variants=['A','V','Y'];
+    for(const variant of variants){
+      if((variant==='B'||variant==='B2')&&!runtimeB){rows.push({name,form,route,variant,error:'skipped: source runtime did not match pin'});break outer}
+      try{const row=await visit(name,form,route,variant);rows.push(row);console.log(JSON.stringify({name,variant,mode:row.before.mode,guardMarker:row.before.guardMarker,bundle:row.bundleLoaded,runtime:row.runtimeLoaded,mutations:row.after.mutationCensus,images:row.network.imageRequests,imageBytes:row.network.imageBytes,w300h300:row.network.w300h300,errors:row.errors.length,failed:row.failed.length}))}
+      catch(e){rows.push({name,form,route,variant,error:String(e)});console.error(JSON.stringify({name,variant,error:String(e)}));break outer}
+      fs.writeFileSync(path.join(out,'rows.json'),JSON.stringify(rows,null,2));
+    }
+  }
+}finally{await browser.close()}
+const pairs=cases.map(([name])=>({name,A:rows.find(r=>r.name===name&&r.variant==='A'),B:rows.find(r=>r.name===name&&r.variant===(syncMatrix?'Y':'B'))}));
+const failures=[];
+for(const p of pairs){
+  if(!p.A||!p.B||p.A.error||p.B.error){failures.push(`${p.name}: missing or failed case`);continue}
+  if(!p.B.bundleLoaded||!p.B.runtimeLoaded)failures.push(`${p.name}: candidate bundle/runtime not active`);
+  if(!runtimeMatrix){
+    for(const k of ['mode','title','bodyTextSha256','pages','mediaItems','navLayers'])if(p.A.before[k]!==p.B.before[k])failures.push(`${p.name}: ${k} differs`);
+    for(const k of ['mode','navLayers','mediaItems','htmlTone'])if(p.A.after[k]!==p.B.after[k])failures.push(`${p.name}: mid ${k} differs`);
+  }else{
+    const c=rows.find(r=>r.name===p.name&&r.variant===(syncMatrix?'V':'C'));
+    if(!c||c.error||!c.capSourceVerified)failures.push(`${p.name}: guard-only control did not load`);
+  }
+  const extra=p.B.errors.filter(x=>!p.A.errors.includes(x));if(extra.length)failures.push(`${p.name}: candidate-only page errors ${extra.length}`);
+}
+for(const r of rows)if(r.interceptionErrors?.length||r.error||r.modeStates?.length!==5||r.modeStates?.some(m=>m.status!=='PASS'))failures.push((r.name||'unknown')+'-'+r.variant+': incomplete five-mode interaction');
+const summary={matrix:syncMatrix?'cdp-cache-first-native-class':runtimeMatrix?'runtime':'parity',cases:cases.length,rows:rows.length,runtimeA:runtimeA&&{bytes:runtimeA.length,sha256:sha(runtimeA)},runtimeB:runtimeB&&{bytes:runtimeB.length,sha256:sha(runtimeB)},failures,pairedMutations:cases.map(([name])=>({name,...Object.fromEntries((runtimeMatrix?['A','C','B','A2','C2','B2']:['A','B','A2']).map(v=>[v,rows.find(r=>r.name===name&&r.variant===v)?.after?.mutationCensus]))})),controls:['desktop-home','desktop-html'].map(name=>({name,A:rows.find(r=>r.name===name&&r.variant==='A')?.before,A2:rows.find(r=>r.name===name&&r.variant==='A2')?.before,B:rows.find(r=>r.name===name&&r.variant==='B')?.before}))};
+fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));
+console.log(JSON.stringify(summary));
+if(failures.length||rows.length!==(syncMatrix?3:noopMatrix?7:runtimeMatrix?cases.length*(paintDiagnostic?3:6):cases.length*2+2))process.exitCode=1;
